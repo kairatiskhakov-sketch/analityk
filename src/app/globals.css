@@ -1,3 +1,79 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --bg: #ffffff;
+  --surface: #f8f7f5;
+  --surface2: #f0ede9;
+  --border: #e8e6e2;
+  --border2: #d4d1cb;
+  --text: #1c1b18;
+  --muted: #787570;
+  --hint: #b0ada6;
+
+  --blue: #2359d6;
+  --blue-bg: #eef3fd;
+  --blue-mid: #85b7eb;
+
+  --green: #1a7a4a;
+  --green-bg: #edfaf3;
+
+  --red: #c73030;
+  --red-bg: #fef1f1;
+
+  --amber: #a05c10;
+  --amber-bg: #fef6ed;
+
+  --r-sm: 7px;
+  --r-md: 11px;
+  --r-lg: 15px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 10px;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-up {
+  animation: fadeUp 0.3s ease both;
+}
+.delay-1 {
+  animation-delay: 0.05s;
+}
+.delay-2 {
+  animation-delay: 0.1s;
+}
+.delay-3 {
+  animation-delay: 0.15s;
+}
+.delay-4 {
+  animation-delay: 0.2s;
+}

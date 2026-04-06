@@ -4,10 +4,26 @@ import {
   leadsBySource,
   topFailReasons,
 } from "@/lib/dashboard/stats";
+import { formatNumber } from "@/lib/utils";
+import {
+  Card,
+  CardHeader,
+  KpiCard,
+  MiniBar,
+  PageTopBar,
+  PeriodRangeLinks,
+} from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
 const emptyFunnel = { new: 0, in_progress: 0, won: 0, lost: 0 };
+
+const FUNNEL_LABELS: Record<string, string> = {
+  new: "Новые",
+  in_progress: "В работе",
+  won: "Выиграно",
+  lost: "Провал",
+};
 
 export default async function LeadsPage({
   searchParams,
@@ -32,88 +48,186 @@ export default async function LeadsPage({
     dbError = e instanceof Error ? e.message : String(e);
   }
 
+  const total =
+    funnel.new + funnel.in_progress + funnel.won + funnel.lost;
+  const maxFunnel = Math.max(
+    funnel.new,
+    funnel.in_progress,
+    funnel.won,
+    funnel.lost,
+    1,
+  );
+  const maxSource = sources.length
+    ? Math.max(...sources.map((s) => s.count))
+    : 1;
+  const maxFail = fails.length ? Math.max(...fails.map((f) => f.count)) : 1;
+
   return (
-    <div className="space-y-8">
-      {dbError ? (
-        <div className="rounded-lg border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-200">
-          <strong>База данных недоступна:</strong> {dbError}
-        </div>
-      ) : null}
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <PageTopBar
+        title="Аналитика лидов"
+        sub="воронка, каналы, провалы"
+        right={<PeriodRangeLinks hrefPrefix="/dashboard/leads" period={period} />}
+      />
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold">Лиды и воронка</h1>
-        <div className="flex gap-2 text-sm">
-          {(["7d", "30d", "90d"] as const).map((p) => (
-            <a
-              key={p}
-              href={`/dashboard/leads?period=${p}`}
-              className={`rounded-lg px-3 py-1.5 ${
-                period === p
-                  ? "bg-emerald-600 text-white"
-                  : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-              }`}
-            >
-              {p}
-            </a>
-          ))}
-        </div>
-      </div>
+      <div className="flex-1 space-y-3 overflow-y-auto px-6 py-4">
+        {dbError ? (
+          <div
+            className="rounded-[11px] border px-4 py-3 text-[13px]"
+            style={{
+              background: "var(--red-bg)",
+              borderColor: "var(--border)",
+              color: "var(--red)",
+            }}
+          >
+            <strong>База данных недоступна:</strong> {dbError}
+          </div>
+        ) : null}
 
-      <section>
-        <h2 className="mb-3 text-sm font-medium text-zinc-400">Воронка</h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {Object.entries(funnel).map(([k, v]) => (
-            <div
-              key={k}
-              className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2"
-            >
-              <div className="text-xs text-zinc-500">{k}</div>
-              <div className="text-lg font-semibold text-emerald-400">{v}</div>
+        <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+          <KpiCard
+            label="Всего лидов"
+            value={formatNumber(total)}
+            chip={{ text: "за период", type: "neutral" }}
+          />
+          <KpiCard
+            label="В работе + новые"
+            value={formatNumber(funnel.new + funnel.in_progress)}
+            chip={{ type: "blue", text: "активные" }}
+          />
+          <KpiCard
+            label="Выиграно"
+            value={formatNumber(funnel.won)}
+            chip={{ type: "up", text: "won" }}
+          />
+          <KpiCard
+            label="Провалов"
+            value={formatNumber(funnel.lost)}
+            chip={{ type: "down", text: "lost" }}
+          />
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Card>
+            <CardHeader title="Воронка" sub="по статусам" />
+            <div className="space-y-2">
+              {(
+                Object.entries(funnel) as [
+                  keyof typeof funnel,
+                  number,
+                ][]
+              ).map(([k, v]) => {
+                const pct = Math.round((v / maxFunnel) * 100);
+                return (
+                  <div key={k} className="flex items-center gap-2.5">
+                    <span
+                      className="w-[100px] flex-shrink-0 text-right text-[11px]"
+                      style={{ color: "var(--muted)" }}
+                    >
+                      {FUNNEL_LABELS[k] ?? k}
+                    </span>
+                    <div
+                      className="h-[28px] flex-1 overflow-hidden rounded-[5px]"
+                      style={{ background: "var(--surface2)" }}
+                    >
+                      <div
+                        className="flex h-full items-center rounded-[5px] px-2 transition-all"
+                        style={{
+                          width: `${pct}%`,
+                          minWidth: v > 0 ? "2rem" : 0,
+                          background: "rgba(28,27,24,0.12)",
+                        }}
+                      >
+                        <span
+                          className="text-[11.5px] font-medium"
+                          style={{ color: "var(--text)" }}
+                        >
+                          {formatNumber(v)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          ))}
-        </div>
-      </section>
+          </Card>
 
-      <section className="grid gap-8 lg:grid-cols-2">
-        <div>
-          <h2 className="mb-3 text-sm font-medium text-zinc-400">Каналы</h2>
-          <ul className="space-y-2 text-sm">
-            {sources.length ? (
-              sources.map((s) => (
-                <li
-                  key={s.source}
-                  className="flex justify-between border-b border-zinc-800/80 py-1"
-                >
-                  <span className="text-zinc-300">{s.source}</span>
-                  <span className="text-zinc-500">{s.count}</span>
-                </li>
-              ))
-            ) : (
-              <li className="text-zinc-500">Нет данных</li>
-            )}
-          </ul>
+          <Card>
+            <CardHeader title="Каналы" sub="топ источников" />
+            <div className="divide-y" style={{ borderColor: "var(--border)" }}>
+              {sources.length ? (
+                sources.map((s) => (
+                  <div
+                    key={s.source}
+                    className="flex items-center gap-2 py-2.5 first:pt-0 last:pb-0"
+                  >
+                    <span
+                      className="flex-1 text-[12.5px]"
+                      style={{ color: "var(--text)" }}
+                    >
+                      {s.source}
+                    </span>
+                    <MiniBar value={s.count} max={maxSource} color="var(--blue)" />
+                    <span
+                      className="min-w-[40px] text-right text-[11.5px]"
+                      style={{ color: "var(--muted)" }}
+                    >
+                      {s.count}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-[13px]" style={{ color: "var(--hint)" }}>
+                  Нет данных
+                </p>
+              )}
+            </div>
+          </Card>
         </div>
-        <div>
-          <h2 className="mb-3 text-sm font-medium text-zinc-400">
-            Причины провалов
-          </h2>
-          <ul className="space-y-2 text-sm">
+
+        <Card>
+          <CardHeader title="Причины провалов" />
+          <div className="divide-y" style={{ borderColor: "var(--border)" }}>
             {fails.length ? (
               fails.map((f) => (
-                <li
+                <div
                   key={f.reason}
-                  className="flex justify-between border-b border-zinc-800/80 py-1"
+                  className="flex items-center gap-2.5 py-2.5 first:pt-0 last:pb-0"
                 >
-                  <span className="text-zinc-300">{f.reason}</span>
-                  <span className="text-zinc-500">{f.count}</span>
-                </li>
+                  <span
+                    className="min-w-0 flex-1 text-[12px]"
+                    style={{ color: "var(--text)" }}
+                  >
+                    {f.reason}
+                  </span>
+                  <div
+                    className="h-[3px] flex-1 rounded-full"
+                    style={{ background: "var(--border)" }}
+                  >
+                    <div
+                      className="h-[3px] rounded-full"
+                      style={{
+                        width: `${Math.round((f.count / maxFail) * 100)}%`,
+                        background: "var(--red)",
+                      }}
+                    />
+                  </div>
+                  <span
+                    className="w-8 text-right text-[11px]"
+                    style={{ color: "var(--muted)" }}
+                  >
+                    {f.count}
+                  </span>
+                </div>
               ))
             ) : (
-              <li className="text-zinc-500">Нет данных</li>
+              <p className="text-[13px]" style={{ color: "var(--hint)" }}>
+                Нет данных
+              </p>
             )}
-          </ul>
-        </div>
-      </section>
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }

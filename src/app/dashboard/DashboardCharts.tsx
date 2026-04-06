@@ -13,6 +13,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Card, CardHeader } from "@/components/ui";
 
 type Props = { period: string };
 
@@ -68,74 +69,83 @@ export function DashboardCharts({ period }: Props) {
   const lineData = series.length ? series : [{ date: "—", count: 0 }];
   const barData = sources.length ? sources : [{ source: "—", count: 0 }];
 
+  const tipStyle = {
+    background: "var(--text)",
+    border: "none",
+    borderRadius: 8,
+    fontSize: 11,
+    color: "#fff",
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {fetchError ? (
-        <p className="rounded-lg border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-sm text-amber-200">
+        <p
+          className="rounded-[11px] border px-3 py-2 text-[13px]"
+          style={{
+            background: "var(--amber-bg)",
+            borderColor: "var(--border)",
+            color: "var(--amber)",
+          }}
+        >
           Графики: {fetchError} (проверьте БД и{" "}
-          <code className="text-xs">DATABASE_URL</code>)
+          <code className="text-[11px]">DATABASE_URL</code>)
         </p>
       ) : null}
 
-      <div className="grid gap-8 lg:grid-cols-2">
-        <div className="min-h-64 min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
-          <h2 className="mb-4 text-sm font-medium text-zinc-300">
-            Лиды по дням
-          </h2>
+      <div className="grid gap-3 lg:grid-cols-2">
+        <Card className="min-h-64 min-w-0">
+          <CardHeader title="Лиды по дням" sub="динамика" />
           <div className="h-64 w-full min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
-                <XAxis dataKey="date" tick={{ fill: "#a1a1aa", fontSize: 11 }} />
-                <YAxis tick={{ fill: "#a1a1aa", fontSize: 11 }} />
-                <Tooltip
-                  contentStyle={{
-                    background: "#18181b",
-                    border: "1px solid #3f3f46",
-                  }}
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: "var(--hint)", fontSize: 11 }}
                 />
+                <YAxis tick={{ fill: "var(--hint)", fontSize: 11 }} />
+                <Tooltip contentStyle={tipStyle} />
                 <Line
                   type="monotone"
                   dataKey="count"
-                  stroke="#34d399"
+                  stroke="var(--blue)"
                   strokeWidth={2}
                   dot={false}
                 />
               </LineChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </Card>
 
-        <div className="min-h-64 min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
-          <h2 className="mb-4 text-sm font-medium text-zinc-300">Каналы</h2>
+        <Card className="min-h-64 min-w-0">
+          <CardHeader title="Каналы" sub="лиды по источнику" />
           <div className="h-64 w-full min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
-                <XAxis type="number" tick={{ fill: "#a1a1aa", fontSize: 11 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis
+                  type="number"
+                  tick={{ fill: "var(--hint)", fontSize: 11 }}
+                />
                 <YAxis
                   type="category"
                   dataKey="source"
                   width={100}
-                  tick={{ fill: "#a1a1aa", fontSize: 10 }}
+                  tick={{ fill: "var(--hint)", fontSize: 10 }}
                 />
-                <Tooltip
-                  contentStyle={{
-                    background: "#18181b",
-                    border: "1px solid #3f3f46",
-                  }}
-                />
+                <Tooltip contentStyle={tipStyle} />
                 <Legend />
                 <Bar
                   dataKey="count"
-                  fill="#22c55e"
+                  fill="var(--green)"
                   name="Лиды"
                   radius={[0, 4, 4, 0]}
                 />
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </Card>
       </div>
     </div>
   );

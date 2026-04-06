@@ -8,13 +8,25 @@ export default function DashboardError({
   reset: () => void;
 }) {
   return (
-    <div className="mx-auto max-w-lg space-y-4 px-4 py-16 text-center">
-      <h1 className="text-xl font-semibold text-red-400">Ошибка раздела</h1>
-      <p className="text-sm text-zinc-400">{error.message}</p>
+    <div
+      className="mx-auto flex max-w-lg flex-col items-center space-y-4 px-4 py-16 text-center"
+      style={{ color: "var(--text)" }}
+    >
+      <h1 className="text-xl font-semibold" style={{ color: "var(--red)" }}>
+        Ошибка раздела
+      </h1>
+      <p className="text-sm" style={{ color: "var(--muted)" }}>
+        {error.message}
+      </p>
       <button
         type="button"
         onClick={reset}
-        className="rounded-lg bg-zinc-800 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-700"
+        className="rounded-[8px] border px-4 py-2 text-sm transition-opacity hover:opacity-90"
+        style={{
+          borderColor: "var(--border)",
+          background: "var(--surface)",
+          color: "var(--text)",
+        }}
       >
         Повторить
       </button>

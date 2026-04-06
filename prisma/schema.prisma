@@ -1,0 +1,209 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- NextAuth.js ---
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  telegramChats TelegramChat[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// --- CRM & integrations ---
+model CrmConnection {
+  id         String    @id @default(cuid())
+  crmType    String // "bitrix24" | "amocrm"
+  isActive   Boolean   @default(false)
+  lastSyncAt DateTime?
+
+  bitrixDomain        String?
+  bitrixWebhookToken  String?
+  bitrixUserId        String?
+
+  amoSubdomain       String?
+  amoClientId        String?
+  amoClientSecret    String?
+  amoAccessToken     String?
+  amoRefreshToken    String?
+  amoTokenExpiresAt  DateTime?
+
+  leads Lead[]
+  deals Deal[]
+}
+
+model GoogleConnection {
+  id     String @id @default(cuid())
+  email  String
+  accessToken    String
+  refreshToken   String
+  tokenExpiresAt DateTime
+
+  adsEnabled          Boolean @default(false)
+  adsCustomerId       String?
+  adsDeveloperToken   String?
+
+  sheetsEnabled       Boolean @default(false)
+  sheetsSpreadsheetId String?
+
+  analyticsEnabled    Boolean @default(false)
+  analyticsPropertyId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TelegramConnection {
+  id       String  @id @default(cuid())
+  botToken String
+  isActive Boolean @default(false)
+
+  notifyNewLead     Boolean @default(true)
+  notifyDealWon     Boolean @default(true)
+  notifyDealLost    Boolean @default(false)
+  notifyDailyReport Boolean @default(true)
+  notifyPlanAlert   Boolean @default(true)
+  dailyReportTime   String  @default("18:00")
+
+  chats TelegramChat[]
+}
+
+model TelegramChat {
+  id           String @id @default(cuid())
+  chatId       String
+  chatType     String // "private" | "group" | "supergroup"
+  title        String?
+  connectionId String
+  connection   TelegramConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  userId       String?
+  user         User?              @relation(fields: [userId], references: [id])
+  isActive     Boolean            @default(true)
+  createdAt    DateTime           @default(now())
+
+  @@unique([chatId, connectionId])
+}
+
+model Lead {
+  id           String @id @default(cuid())
+  externalId   String
+  crmType      String
+  connectionId String
+  connection   CrmConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  name  String
+  phone String?
+  email String?
+
+  source      String
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmContent  String?
+  gclid       String?
+  fbclid      String?
+
+  managerId String?
+  manager   Manager? @relation(fields: [managerId], references: [id])
+
+  status     String
+  amount     Float   @default(0)
+  failReason String?
+
+  createdAt DateTime
+  closedAt  DateTime?
+  syncedAt  DateTime  @default(now())
+
+  @@unique([externalId, crmType])
+}
+
+model Manager {
+  id         String @id @default(cuid())
+  externalId String
+  crmType    String
+  name       String
+  email      String?
+  telegramId String?
+  leads      Lead[]
+  deals      Deal[]
+
+  @@unique([externalId, crmType])
+}
+
+model Deal {
+  id           String @id @default(cuid())
+  externalId   String
+  crmType      String
+  connectionId String
+  connection   CrmConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  managerId    String?
+  manager      Manager?      @relation(fields: [managerId], references: [id])
+  amount       Float
+  source       String?
+  createdAt    DateTime
+  closedAt     DateTime?
+
+  @@unique([externalId, crmType])
+}
+
+model SalesPlan {
+  id        String   @id @default(cuid())
+  period    String
+  managerId String?
+  target    Float
+  createdAt DateTime @default(now())
+}
+
+model SyncLog {
+  id           String   @id @default(cuid())
+  connectionId String
+  crmType      String
+  leadsCount   Int
+  dealsCount   Int
+  errors       String?
+  startedAt    DateTime
+  finishedAt   DateTime
+}

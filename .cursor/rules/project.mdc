@@ -1,0 +1,7 @@
+---
+description: Контекст проекта CRM Sales Analytics Dashboard
+---
+
+- Стек: Next.js 14 App Router, TypeScript, Tailwind, Prisma + PostgreSQL, NextAuth, интеграции по ТЗ.
+- Ответы ассистента — на русском; начинать с перечисления прочитанных файлов правил из `.cursor/rules`.
+- Секреты в БД шифровать через `lib/crypto.ts` (шаг 2 ТЗ).

@@ -9,6 +9,9 @@ export type UnifiedDealFromBitrix = {
   amount: number;
   source?: string | null;
   managerExternalId?: string | null;
+  /** Bitrix CATEGORY_ID */
+  pipelineId: string;
+  stageId?: string | null;
   createdAt: Date;
   closedAt?: Date | null;
 };
@@ -123,6 +126,7 @@ export function mapBitrixLeadToUnified(
 
   return {
     externalId: id,
+    stageExternalId: statusId || null,
     name: pickStr(row.TITLE)?.trim() || "Без названия",
     phone: pickPhone(row) ?? null,
     email: pickEmail(row) ?? null,
@@ -152,12 +156,16 @@ export function mapBitrixDealToUnified(
   const sourceId = pickStr(row.SOURCE_ID) ?? "";
   const source =
     sourceMap?.get(sourceId) ?? (sourceId ? `source:${sourceId}` : null);
+  const stageId = pickStr(row.STAGE_ID) ?? null;
+  const pipelineId = pickStr(row.CATEGORY_ID) ?? "0";
 
   return {
     externalId: id,
     amount: pickNum(row.OPPORTUNITY),
     source,
     managerExternalId: pickStr(row.ASSIGNED_BY_ID) ?? null,
+    pipelineId,
+    stageId,
     createdAt: parseBitrixDate(row.DATE_CREATE) ?? new Date(),
     closedAt: parseBitrixDate(row.CLOSEDATE) ?? parseBitrixDate(row.DATE_MODIFY) ?? null,
   };

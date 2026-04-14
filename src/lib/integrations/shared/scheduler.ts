@@ -1,5 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { decrypt } from "@/lib/crypto";
+import {
+  bitrixLeadExportRowsForDay,
+  buildBitrixDailyReportData,
+} from "@/lib/bitrix/reporting";
 import { syncBitrix24Connection } from "@/lib/integrations/bitrix24/sync";
 import {
   refreshAmoTokensIfNeeded,
@@ -7,20 +11,18 @@ import {
 } from "@/lib/integrations/amocrm/sync";
 import { getGoogleAccessToken } from "@/lib/integrations/google/connection";
 import { exportDailyReport } from "@/lib/integrations/google/sheets";
-import type { LeadExportRow } from "@/lib/integrations/google/sheets";
 import { setTelegramWebhook } from "@/lib/integrations/telegram/bot";
 import {
   broadcastToAll,
 } from "@/lib/integrations/telegram/notifications";
 import type { DailyReportData } from "@/lib/integrations/telegram/types";
-
 export type SchedulerJobResult = {
   job: string;
   ok: boolean;
   detail?: string;
 };
 
-/** Каждые ~30 мин: синхронизация всех активных CRM */
+/** Синхронизация справочников CRM (воронки, менеджеры), без лидов/сделок в БД */
 export async function syncAllCrm(): Promise<SchedulerJobResult> {
   const conns = await prisma.crmConnection.findMany({ where: { isActive: true } });
   const errors: string[] = [];
@@ -41,7 +43,6 @@ export async function syncAllCrm(): Promise<SchedulerJobResult> {
   };
 }
 
-/** Каждые ~60 мин: обновление OAuth-токенов AmoCRM */
 export async function refreshAllAmoTokens(): Promise<SchedulerJobResult> {
   const conns = await prisma.crmConnection.findMany({
     where: { crmType: "amocrm", isActive: true },
@@ -56,36 +57,17 @@ export async function refreshAllAmoTokens(): Promise<SchedulerJobResult> {
   return { job: "refreshAllAmoTokens", ok: true, detail: `count=${conns.length}` };
 }
 
-/** Ночной экспорт в Google Sheets (лиды за «сегодня» по серверу) */
 export async function exportToSheetsNightly(): Promise<SchedulerJobResult> {
   const conns = await prisma.googleConnection.findMany({
     where: { sheetsEnabled: true, sheetsSpreadsheetId: { not: null } },
   });
   const day = new Date();
-  const start = new Date(day);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(day);
-  end.setHours(23, 59, 59, 999);
-
   const errors: string[] = [];
   for (const gc of conns) {
     try {
       const { accessToken } = await getGoogleAccessToken(gc.id);
       const sid = gc.sheetsSpreadsheetId!;
-      const leads = await prisma.lead.findMany({
-        where: { createdAt: { gte: start, lte: end } },
-        include: { manager: true },
-      });
-      const rows: LeadExportRow[] = leads.map((l) => ({
-        id: l.id,
-        name: l.name,
-        channel: l.source,
-        manager: l.manager?.name ?? "—",
-        amount: l.amount,
-        status: l.status,
-        reason: l.failReason ?? "",
-        date: l.createdAt.toISOString().slice(0, 10),
-      }));
+      const rows = await bitrixLeadExportRowsForDay(day);
       await exportDailyReport(accessToken, sid, day, rows);
     } catch (e) {
       errors.push(gc.id + ": " + (e instanceof Error ? e.message : String(e)));
@@ -99,41 +81,18 @@ export async function exportToSheetsNightly(): Promise<SchedulerJobResult> {
 }
 
 async function buildDailyReportData(): Promise<DailyReportData> {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date();
-  const leads = await prisma.lead.findMany({
-    where: { createdAt: { gte: start, lte: end } },
-    include: { manager: true },
-  });
-  const won = leads.filter((l) => l.status === "won");
-  const lost = leads.filter((l) => l.status === "lost");
-  const inProgress = leads.filter(
-    (l) => l.status === "in_progress" || l.status === "new",
-  );
-  const soldAmount = won.reduce((s, l) => s + l.amount, 0);
-
-  const byMgr = new Map<string, { name: string; wins: number }>();
-  for (const l of won) {
-    if (!l.manager) continue;
-    const cur = byMgr.get(l.manager.id) ?? { name: l.manager.name, wins: 0 };
-    cur.wins += 1;
-    byMgr.set(l.manager.id, cur);
-  }
-  const best = Array.from(byMgr.values()).sort((a, b) => b.wins - a.wins)[0];
-
+  const data = await buildBitrixDailyReportData();
   return {
-    date: start.toISOString().slice(0, 10),
-    leadsCount: leads.length,
-    soldCount: won.length,
-    soldAmount,
-    lostCount: lost.length,
-    inProgressCount: inProgress.length,
-    bestManager: best?.name,
+    date: data.date,
+    leadsCount: data.leadsCount,
+    soldCount: data.soldCount,
+    soldAmount: data.soldAmount,
+    lostCount: data.lostCount,
+    inProgressCount: data.inProgressCount,
+    bestManager: data.bestManager,
   };
 }
 
-/** Ежедневный отчёт в Telegram (`onlyIfMatchesSchedule`: слот 5 мин около времени из `dailyReportTime`) */
 export async function sendDailyTelegramReports(
   onlyIfMatchesSchedule = true,
 ): Promise<SchedulerJobResult> {
@@ -174,7 +133,6 @@ export async function sendDailyTelegramReports(
   };
 }
 
-/** Окно 5 минут от заданного HH:MM */
 function matchesDailyTimeSlot(schedule: string, now: Date): boolean {
   const parts = schedule.split(":").map((s) => parseInt(s.trim(), 10));
   const h = parts[0];
@@ -185,7 +143,6 @@ function matchesDailyTimeSlot(schedule: string, now: Date): boolean {
   return cur >= target && cur < target + 5;
 }
 
-/** При старте: зарегистрировать webhook Telegram для активных ботов */
 export async function registerTelegramWebhooks(): Promise<SchedulerJobResult> {
   const base = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
@@ -210,7 +167,6 @@ export async function registerTelegramWebhooks(): Promise<SchedulerJobResult> {
   };
 }
 
-/** Все задачи подряд (для ручного запуска) */
 export async function runAllScheduledJobs(): Promise<SchedulerJobResult[]> {
   return [
     await syncAllCrm(),

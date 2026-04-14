@@ -1,11 +1,9 @@
+import { getFirstActiveCrmConnection } from "@/lib/crm/active-connection";
+import { EMPTY_LEAD_METRICS } from "@/lib/dashboard/no-crm-empty";
 import { getLeadMetrics } from "@/lib/dashboard/stats";
 
 const empty: Awaited<ReturnType<typeof getLeadMetrics>> = {
-  total: 0,
-  won: 0,
-  lost: 0,
-  inProgress: 0,
-  salesAmount: 0,
+  ...EMPTY_LEAD_METRICS,
 };
 
 export async function getLeadMetricsSafe(
@@ -15,6 +13,10 @@ export async function getLeadMetricsSafe(
   dbError: string | null;
 }> {
   try {
+    const active = await getFirstActiveCrmConnection();
+    if (!active) {
+      return { metrics: empty, dbError: null };
+    }
     const metrics = await getLeadMetrics(...args);
     return { metrics, dbError: null };
   } catch (e) {

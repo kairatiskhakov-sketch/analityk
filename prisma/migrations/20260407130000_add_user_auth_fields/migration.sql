@@ -1,0 +1,18 @@
+-- CreateEnum
+CREATE TYPE "Role" AS ENUM ('ADMIN', 'MANAGER');
+
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN     "password" TEXT,
+ADD COLUMN "role" "Role" NOT NULL DEFAULT 'MANAGER',
+ADD COLUMN "initials" TEXT,
+ADD COLUMN "telegramId" TEXT,
+ADD COLUMN "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE "User" SET "email" = "id" || '@migrated.local' WHERE "email" IS NULL;
+UPDATE "User" SET "name" = COALESCE("name", 'User') WHERE "name" IS NULL;
+UPDATE "User" SET "password" = '$2b$12$edFvHweValss1XrcMDa5h.xp9PQ0qMEAkzs4nKgIpPV7wM82tUMqW' WHERE "password" IS NULL;
+
+ALTER TABLE "User" ALTER COLUMN "password" SET NOT NULL;
+ALTER TABLE "User" ALTER COLUMN "name" SET NOT NULL;
+ALTER TABLE "User" ALTER COLUMN "email" SET NOT NULL;

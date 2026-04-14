@@ -13,13 +13,20 @@ export type BitrixLeadRow = Record<string, unknown>;
 export type BitrixDealRow = Record<string, unknown>;
 
 export type BitrixUserRow = {
-  ID?: string;
+  ID?: string | number;
   NAME?: string;
   LAST_NAME?: string;
   EMAIL?: string;
+  /** Bitrix: Y/N или boolean */
+  ACTIVE?: boolean | string | number;
 };
 
 export type BitrixStatusRow = {
   STATUS_ID?: string;
   NAME?: string;
+  SORT?: number | string;
+  COLOR?: string;
+  /** S = success, F = failure, P/I = in progress (Bitrix) */
+  SEMANTICS?: string;
+  ENTITY_ID?: string;
 };

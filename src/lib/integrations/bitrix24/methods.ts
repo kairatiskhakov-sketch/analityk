@@ -46,6 +46,25 @@ export async function bitrixDealCategoryList(client: Client) {
   return client.call<unknown[]>("crm.dealcategory.list", {});
 }
 
+export async function bitrixDealCategoryGet(
+  client: Client,
+  params: { id: number | string },
+) {
+  return client.call<{
+    ID?: string | number;
+    NAME?: string;
+    SORT?: string | number;
+  }>("crm.dealcategory.get", params);
+}
+
+/** Универсальный crm.status.list (лиды STATUS, сделки DEAL_STAGE и т.д.) */
+export async function bitrixCrmStatusList(
+  client: Client,
+  filter: Record<string, unknown>,
+) {
+  return client.call<BitrixStatusRow[]>("crm.status.list", { filter });
+}
+
 export async function bitrixStatusListSource(client: Client) {
   return client.call<BitrixStatusRow[]>("crm.status.list", {
     filter: { ENTITY_ID: "SOURCE" },
@@ -60,9 +79,33 @@ export async function bitrixStatusListLeadLostReason(client: Client) {
 
 export async function bitrixUserGet(
   client: Client,
-  params?: { filter?: Record<string, unknown> },
+  params?: {
+    filter?: Record<string, unknown>;
+    select?: string[];
+    sort?: string;
+    order?: "ASC" | "DESC" | string;
+    start?: number;
+  },
 ) {
   return client.call<BitrixUserRow[]>("user.get", params ?? {});
+}
+
+/** Все пользователи Bitrix с пагинацией (next/start). */
+export async function fetchAllBitrixUsers(
+  client: Client,
+  base: Omit<Parameters<typeof bitrixUserGet>[1], "start">,
+): Promise<BitrixUserRow[]> {
+  const out: BitrixUserRow[] = [];
+  let start = 0;
+  for (;;) {
+    const res = await bitrixUserGet(client, { ...base, start });
+    const batch = res.result ?? [];
+    if (batch.length === 0) break;
+    out.push(...batch);
+    if (res.next === undefined || res.next === null) break;
+    start = res.next;
+  }
+  return out;
 }
 
 export async function fetchAllLeads(

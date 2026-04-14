@@ -1,8 +1,39 @@
-import { prisma } from "@/lib/prisma";
+import {
+  dealAnalyticsType,
+  dealIsWon,
+  getStageConfigs,
+  leadIsLost,
+  leadIsWon,
+  parseOpportunity,
+} from "@/lib/bitrix/api";
+import {
+  fetchDealsCached,
+  fetchLeadsCached,
+  fetchManagersCached,
+  fetchSourcesCatalogCached,
+} from "@/lib/bitrix/cache";
+import {
+  getActiveBitrixConnection,
+  getBitrixWebhookBaseUrl,
+} from "@/lib/bitrix/connection";
+import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
+import { computeWonDealFacts } from "@/lib/plan/bitrix-facts";
+import {
+  daysInRangeInclusive,
+  elapsedDaysInPeriod,
+  formatPeriodLabelRu,
+  parsePeriodToRange,
+  periodKeyFromDate,
+} from "@/lib/plan/period";
 import { syncAmoConnection } from "@/lib/integrations/amocrm/sync";
 import { syncBitrix24Connection } from "@/lib/integrations/bitrix24/sync";
+import { prisma } from "@/lib/prisma";
 import { createTelegramBot } from "./bot";
-import { leadsPeriodKeyboard, mainMenuKeyboard, statsPeriodKeyboard } from "./keyboards";
+import {
+  leadsPeriodKeyboard,
+  mainMenuKeyboard,
+  statsPeriodKeyboard,
+} from "./keyboards";
 import { registerChat } from "./notifications";
 import type TelegramBot from "node-telegram-bot-api";
 
@@ -21,15 +52,41 @@ function rangeForPeriod(period: Period): { start: Date; end: Date } {
   return { start, end };
 }
 
+function ymd(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+async function getBitrixUrl(): Promise<string | null> {
+  const conn = await getActiveBitrixConnection();
+  if (!conn) return null;
+  return getBitrixWebhookBaseUrl(conn);
+}
+
 async function fetchStatsText(period: Period): Promise<string> {
   const { start, end } = rangeForPeriod(period);
-  const leads = await prisma.lead.findMany({
-    where: { createdAt: { gte: start, lte: end } },
-  });
-  const newCount = leads.filter((l) => l.status === "new").length;
-  const won = leads.filter((l) => l.status === "won");
-  const lost = leads.filter((l) => l.status === "lost");
-  const sales = won.reduce((s, l) => s + l.amount, 0);
+  const url = await getBitrixUrl();
+  if (!url) {
+    return "Bitrix24 не подключён. Настройте CRM в Saldo.";
+  }
+  const [wonStageIds, stageConfigs, leads, deals] = await Promise.all([
+    getOrSyncWonStageIds(url),
+    getStageConfigs(),
+    fetchLeadsCached(url, ymd(start), ymd(end)),
+    fetchDealsCached(url, ymd(start), ymd(end)),
+  ]);
+  const newCount = leads.filter((l) => (l.STATUS_ID ?? "").toUpperCase() === "NEW")
+    .length;
+  const won = leads.filter(leadIsWon);
+  const lost = leads.filter(leadIsLost);
+  const leadSales = won.reduce((s, l) => s + parseOpportunity(l.OPPORTUNITY), 0);
+  const dealSales = deals
+    .filter((d) =>
+      stageConfigs.length > 0
+        ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
+        : dealIsWon(d, wonStageIds),
+    )
+    .reduce((s, d) => s + parseOpportunity(d.OPPORTUNITY), 0);
+  const sales = leadSales + dealSales;
   const conv =
     leads.length > 0 ? Math.round((won.length / leads.length) * 100) : 0;
 
@@ -41,12 +98,12 @@ async function fetchStatsText(period: Period): Promise<string> {
         : "за месяц";
 
   return [
-    `📊 <b>Статистика ${label}</b>`,
+    `📊 <b>Статистика ${label}</b> (Bitrix24 live)`,
     `💰 Продажи: ${fmtMoney(sales)} ₸`,
     `🎯 Лидов: ${leads.length} (${newCount} новых)`,
-    `✅ Закрыто в плюс: ${won.length}`,
+    `✅ Успешных лидов: ${won.length}`,
     `❌ Провалено: ${lost.length}`,
-    `📈 Конверсия в успех: ${conv}%`,
+    `📈 Конверсия (лиды): ${conv}%`,
   ].join("\n");
 }
 
@@ -56,110 +113,133 @@ function fmtMoney(n: number): string {
 
 async function fetchLeadsText(period: Period): Promise<string> {
   const { start, end } = rangeForPeriod(period);
-  const leads = await prisma.lead.findMany({
-    where: { createdAt: { gte: start, lte: end } },
-    include: { manager: true },
-    orderBy: { createdAt: "desc" },
-    take: 15,
-  });
-  if (!leads.length) return "Нет лидов за период.";
+  const url = await getBitrixUrl();
+  if (!url) return "Bitrix24 не подключён.";
 
-  const lines = leads.map((l) => {
+  const [leads, managers, sources] = await Promise.all([
+    fetchLeadsCached(url, ymd(start), ymd(end)),
+    fetchManagersCached(url),
+    fetchSourcesCatalogCached(url),
+  ]);
+  const mgrMap = new Map(managers.map((m) => [m.id, m.name]));
+  const srcMap = new Map(sources.map((s) => [s.id, s.name]));
+
+  const sorted = [...leads].slice(0, 15);
+  if (!sorted.length) return "Нет лидов за период.";
+
+  const lines = sorted.map((l) => {
+    const st = (l.STATUS_ID ?? "").toUpperCase();
     const icon =
-      l.status === "won" ? "✅" : l.status === "lost" ? "❌" : "🆕";
-    const reason = l.failReason ? ` (${l.failReason})` : "";
-    return `${icon} ${l.name} — ${l.source} — ${fmtMoney(l.amount)} ₸ — ${l.status}${reason}`;
+      st === "CONVERTED" ? "✅" : st === "JUNK" ? "❌" : "🆕";
+    const src = srcMap.get((l.SOURCE_ID ?? "").toString()) ?? l.SOURCE_ID ?? "—";
+    const mgr =
+      mgrMap.get((l.ASSIGNED_BY_ID ?? "").toString()) ?? "—";
+    return `${icon} ${(l.TITLE ?? "").trim() || "—"} — ${src} — ${fmtMoney(parseOpportunity(l.OPPORTUNITY))} ₸ — ${st} (${mgr})`;
   });
-  return ["<b>Последние лиды</b>", ...lines].join("\n");
+  return ["<b>Последние лиды (Bitrix24)</b>", ...lines].join("\n");
 }
 
 async function fetchManagersText(): Promise<string> {
-  const { start } = rangeForPeriod("month");
-  const leads = await prisma.lead.findMany({
-    where: {
-      createdAt: { gte: start },
-      status: "won",
-      managerId: { not: null },
-    },
-    include: { manager: true },
-  });
-  const byManager = new Map<string, { name: string; sum: number; count: number }>();
-  for (const l of leads) {
-    if (!l.manager) continue;
-    const cur = byManager.get(l.manager.id) ?? {
-      name: l.manager.name,
-      sum: 0,
-      count: 0,
-    };
-    cur.sum += l.amount;
+  const { start, end } = rangeForPeriod("month");
+  const url = await getBitrixUrl();
+  if (!url) return "Bitrix24 не подключён.";
+
+  const [wonStageIds, stageConfigs, deals] = await Promise.all([
+    getOrSyncWonStageIds(url),
+    getStageConfigs(),
+    fetchDealsCached(url, ymd(start), ymd(end)),
+  ]);
+  const wonDeals = deals.filter((d) =>
+    stageConfigs.length > 0
+      ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
+      : dealIsWon(d, wonStageIds),
+  );
+  const managers = await fetchManagersCached(url);
+  const nameById = new Map(managers.map((m) => [m.id, m.name]));
+
+  const byManager = new Map<
+    string,
+    { name: string; sum: number; count: number }
+  >();
+  for (const d of wonDeals) {
+    const id = (d.ASSIGNED_BY_ID ?? "").toString();
+    if (!id) continue;
+    const name = nameById.get(id) ?? id;
+    const cur = byManager.get(id) ?? { name, sum: 0, count: 0 };
+    cur.sum += parseOpportunity(d.OPPORTUNITY);
     cur.count += 1;
-    byManager.set(l.manager.id, cur);
+    byManager.set(id, cur);
   }
   const sorted = Array.from(byManager.values())
     .sort((a, b) => b.sum - a.sum)
     .slice(0, 10);
-  if (!sorted.length) return "Нет закрытых сделок за месяц.";
+  if (!sorted.length) return "Нет выигранных сделок за месяц (Bitrix24).";
 
   const medals = ["🥇", "🥈", "🥉"];
   const lines = sorted.map((m, i) => {
     const med = medals[i] ?? "▪️";
     return `${med} ${m.name} — ${fmtMoney(m.sum)} ₸ (${m.count} сделок)`;
   });
-  return ["<b>Рейтинг менеджеров (месяц)</b>", ...lines].join("\n");
+  return ["<b>Рейтинг менеджеров (месяц, сделки won)</b>", ...lines].join("\n");
 }
 
 async function fetchPlanText(): Promise<string> {
   const now = new Date();
-  const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const plans = await prisma.salesPlan.findMany({
-    where: { period },
-  });
-  const fact = await prisma.lead.aggregate({
-    where: {
-      status: "won",
-      closedAt: {
-        gte: new Date(now.getFullYear(), now.getMonth(), 1),
-        lte: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
-      },
-    },
-    _sum: { amount: true },
-  });
-  const target = plans.reduce((s, p) => s + p.target, 0) || 5_000_000;
-  const factAmount = fact._sum.amount ?? 0;
-  const pct = target > 0 ? Math.min(100, Math.round((factAmount / target) * 100)) : 0;
-  const barLen = 10;
-  const filled = Math.round((pct / 100) * barLen);
-  const bar = "█".repeat(filled) + "░".repeat(barLen - filled);
+  const period = periodKeyFromDate(now, "month");
+  const periodType = "month" as const;
+  const url = await getBitrixUrl();
+  if (!url) return "Bitrix24 не подключён.";
 
-  return [
-    `📅 План ${period}`,
-    `🎯 План: ${fmtMoney(target)} ₸`,
+  const teamRow = await prisma.planTarget.findFirst({
+    where: { period, periodType, managerId: null },
+  });
+  const target = teamRow?.target ?? 0;
+  const { team: factAmount } = await computeWonDealFacts(url, period, periodType);
+
+  const { start, end } = parsePeriodToRange(period, periodType);
+  const totalDays = daysInRangeInclusive(start, end);
+  const daysPassed = elapsedDaysInPeriod(start, end, now);
+  const daysLeft = Math.max(0, totalDays - daysPassed);
+
+  const pct = target > 0 ? Math.min(100, Math.round((factAmount / target) * 100)) : 0;
+  const remaining = Math.max(0, target - factAmount);
+  const neededPerDay = daysLeft > 0 ? remaining / daysLeft : 0;
+  const title = formatPeriodLabelRu(period, periodType);
+
+  const lines = [
+    `📊 <b>План на ${title}</b>`,
+    `🎯 Общий план: ${fmtMoney(target)} ₸`,
     `✅ Факт: ${fmtMoney(factAmount)} ₸`,
-    `📊 Выполнено: ${pct}% ${bar}`,
-  ].join("\n");
+    `📈 Выполнено: ${pct}%`,
+    `⏰ Осталось дней: ${daysLeft}`,
+  ];
+  if (target > 0 && factAmount < target && daysLeft > 0) {
+    lines.push(`💡 Нужный темп: ${fmtMoney(Math.round(neededPerDay))} ₸/день`);
+  }
+  return lines.join("\n");
 }
 
 async function runAllSync(): Promise<string> {
   const conns = await prisma.crmConnection.findMany({
     where: { isActive: true },
   });
-  let leads = 0;
-  let deals = 0;
+  const parts: string[] = [];
   for (const c of conns) {
     try {
       if (c.crmType === "bitrix24") {
         const r = await syncBitrix24Connection(c.id);
-        leads += r.leadsCount;
-        deals += r.dealsCount;
+        parts.push(
+          `Bitrix24: справочники обновлены (воронок ${r.pipelinesCount}, менеджеров ${r.managersCount}).`,
+        );
       } else if (c.crmType === "amocrm") {
         const r = await syncAmoConnection(c.id);
-        leads += r.leadsCount;
+        parts.push(`AmoCRM: менеджеров в кеше ${r.managersCount}.`);
       }
-    } catch {
-      /* skip */
+    } catch (e) {
+      parts.push(`Ошибка: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  return `Синхронизировано: ${leads} лидов, ${deals} сделок (Bitrix).`;
+  return parts.length ? parts.join("\n") : "Нет активных CRM.";
 }
 
 export async function dispatchTelegramUpdate(
@@ -240,9 +320,13 @@ async function handleMessage(
   );
 
   if (text.startsWith("/start")) {
-    await bot.sendMessage(chat.id, "CRM Sales Analytics. Команды: /stats /leads /managers /plan /sync /report", {
-      reply_markup: mainMenuKeyboard(),
-    });
+    await bot.sendMessage(
+      chat.id,
+      "CRM Sales Analytics. Команды: /stats /leads /managers /plan /sync /report",
+      {
+        reply_markup: mainMenuKeyboard(),
+      },
+    );
     return;
   }
 

@@ -15,23 +15,37 @@ import {
 } from "recharts";
 import { Card, CardHeader } from "@/components/ui";
 
-type Props = { period: string };
+type Props = { dateFrom: string; dateTo: string };
 
-export function DashboardCharts({ period }: Props) {
+const GRID = "#1e1e1e";
+const TICK = { fill: "#555555", fontSize: 11 };
+const TIP = {
+  background: "#1a1a1a",
+  border: "1px solid #333333",
+  borderRadius: "8px",
+  color: "#ffffff",
+  fontSize: 11,
+};
+
+export function DashboardCharts({ dateFrom, dateTo }: Props) {
   const [series, setSeries] = useState<{ date: string; count: number }[]>([]);
   const [sources, setSources] = useState<{ source: string; count: number }[]>(
     [],
   );
   const [fetchError, setFetchError] = useState<string | null>(null);
 
+  const qs = new URLSearchParams({ dateFrom, dateTo });
+  const q = qs.toString();
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setFetchError(null);
       try {
-        const [cRes, sRes] = await Promise.all([
-          fetch(`/api/dashboard/chart?period=${encodeURIComponent(period)}`),
-          fetch(`/api/leads/sources?period=${encodeURIComponent(period)}`),
+        const [cRes, sRes, mRes] = await Promise.all([
+          fetch(`/api/dashboard/chart?${q}`, { cache: "no-store" }),
+          fetch(`/api/leads/sources?${q}`, { cache: "no-store" }),
+          fetch(`/api/dashboard/metrics?${q}`, { cache: "no-store" }),
         ]);
 
         if (!cRes.ok) {
@@ -42,9 +56,14 @@ export function DashboardCharts({ period }: Props) {
           const t = await sRes.text();
           throw new Error(t.slice(0, 200) || `sources ${sRes.status}`);
         }
+        if (!mRes.ok) {
+          const t = await mRes.text();
+          throw new Error(t.slice(0, 200) || `metrics ${mRes.status}`);
+        }
 
         const cJson: unknown = await cRes.json();
         const sJson: unknown = await sRes.json();
+        await mRes.json();
 
         const cSeries = (cJson as { series?: unknown })?.series;
         const sSrc = (sJson as { sources?: unknown })?.sources;
@@ -64,24 +83,16 @@ export function DashboardCharts({ period }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [period]);
+  }, [q]);
 
   const lineData = series.length ? series : [{ date: "—", count: 0 }];
   const barData = sources.length ? sources : [{ source: "—", count: 0 }];
-
-  const tipStyle = {
-    background: "var(--text)",
-    border: "none",
-    borderRadius: 8,
-    fontSize: 11,
-    color: "#fff",
-  };
 
   return (
     <div className="space-y-3">
       {fetchError ? (
         <p
-          className="rounded-[11px] border px-3 py-2 text-[13px]"
+          className="rounded-[12px] border px-3 py-2 text-[13px]"
           style={{
             background: "var(--amber-bg)",
             borderColor: "var(--border)",
@@ -99,19 +110,21 @@ export function DashboardCharts({ period }: Props) {
           <div className="h-64 w-full min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
                 <XAxis
                   dataKey="date"
-                  tick={{ fill: "var(--hint)", fontSize: 11 }}
+                  tick={TICK}
+                  axisLine={false}
+                  tickLine={false}
                 />
-                <YAxis tick={{ fill: "var(--hint)", fontSize: 11 }} />
-                <Tooltip contentStyle={tipStyle} />
+                <YAxis tick={TICK} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={TIP} />
                 <Line
                   type="monotone"
                   dataKey="count"
-                  stroke="var(--blue)"
+                  stroke="#c8ff00"
                   strokeWidth={2}
-                  dot={false}
+                  dot={{ fill: "#c8ff00", r: 3 }}
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -123,24 +136,29 @@ export function DashboardCharts({ period }: Props) {
           <div className="h-64 w-full min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
                 <XAxis
                   type="number"
-                  tick={{ fill: "var(--hint)", fontSize: 11 }}
+                  tick={TICK}
+                  axisLine={false}
+                  tickLine={false}
                 />
                 <YAxis
                   type="category"
                   dataKey="source"
                   width={100}
-                  tick={{ fill: "var(--hint)", fontSize: 10 }}
+                  tick={{ fill: "#555555", fontSize: 10 }}
+                  axisLine={false}
+                  tickLine={false}
                 />
-                <Tooltip contentStyle={tipStyle} />
+                <Tooltip contentStyle={TIP} />
                 <Legend />
                 <Bar
                   dataKey="count"
-                  fill="var(--green)"
+                  fill="#c8ff00"
                   name="Лиды"
                   radius={[0, 4, 4, 0]}
+                  opacity={0.9}
                 />
               </BarChart>
             </ResponsiveContainer>

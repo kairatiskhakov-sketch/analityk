@@ -1,54 +1,61 @@
 import { decrypt } from "@/lib/crypto";
 import { prisma } from "@/lib/prisma";
-import { normalizeUnifiedLead } from "@/lib/integrations/shared/mapper";
 import { createBitrix24Client } from "./client";
+import type { BitrixStatusRow } from "./types";
 import {
+  bitrixCrmStatusList,
+  bitrixDealCategoryGet,
   bitrixDealCategoryList,
   bitrixStatusListLeadLostReason,
   bitrixStatusListSource,
-  bitrixUserGet,
-  fetchAllDeals,
-  fetchAllLeads,
+  fetchAllBitrixUsers,
 } from "./methods";
-import { mapBitrixDealToUnified, mapBitrixLeadToUnified } from "./mapper";
 
-const LEAD_SELECT = [
-  "ID",
-  "TITLE",
-  "SOURCE_ID",
-  "ASSIGNED_BY_ID",
-  "STATUS_ID",
-  "OPPORTUNITY",
-  "CURRENCY_ID",
-  "CREATED_TIME",
-  "CLOSED_TIME",
-  "COMMENTS",
-  "LOST_REASON_ID",
-  "PHONE",
-  "EMAIL",
-] as const;
+function pickStr(v: unknown): string | undefined {
+  if (v == null) return undefined;
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return undefined;
+}
 
-const DEAL_SELECT = [
-  "ID",
-  "TITLE",
-  "OPPORTUNITY",
-  "SOURCE_ID",
-  "ASSIGNED_BY_ID",
-  "DATE_CREATE",
-  "CLOSEDATE",
-  "STAGE_ID",
-] as const;
+/** Флаги стадии лида по Bitrix SEMANTICS / известным STATUS_ID */
+function leadStageSemantics(row: BitrixStatusRow): {
+  isSuccess: boolean;
+  isLost: boolean;
+} {
+  const sid = (row.STATUS_ID ?? "").toUpperCase();
+  const sem = (row.SEMANTICS ?? "").toUpperCase();
+  if (sem === "S" || sid === "CONVERTED") return { isSuccess: true, isLost: false };
+  if (sem === "F" || sid === "JUNK") return { isSuccess: false, isLost: true };
+  return { isSuccess: false, isLost: false };
+}
+
+/** Флаги стадии сделки (воронка) */
+function dealStageSemantics(row: BitrixStatusRow): {
+  isSuccess: boolean;
+  isLost: boolean;
+} {
+  const sem = (row.SEMANTICS ?? "").toUpperCase();
+  const sid = (row.STATUS_ID ?? "").toUpperCase();
+  if (sem === "S" || /:WON$|_WON$/i.test(sid)) {
+    return { isSuccess: true, isLost: false };
+  }
+  if (sem === "F" || /:LOSE$|_LOSE$|LOST$/i.test(sid)) {
+    return { isSuccess: false, isLost: true };
+  }
+  return { isSuccess: false, isLost: false };
+}
 
 export type BitrixSyncResult = {
-  leadsCount: number;
-  dealsCount: number;
+  pipelinesCount: number;
+  managersCount: number;
   dealsCategoriesCount: number;
   error?: string;
 };
 
 /**
- * Полная синхронизация лидов и сделок по входящему вебхуку Bitrix24.
- * Токен в БД в зашифрованном виде.
+ * Обновление кеша справочников Bitrix24 (воронки, стадии, менеджеры).
+ * Лиды и сделки не сохраняются в БД — данные читаются из API в реальном времени.
  */
 export async function syncBitrix24Connection(
   connectionId: string,
@@ -76,32 +83,292 @@ export async function syncBitrix24Connection(
     webhookToken: token,
   });
 
-  const startedAt = new Date();
-
-  const [srcRes, lostRes, usersRes, catRes] = await Promise.all([
+  const [catRes, srcRes, lostRes] = await Promise.all([
+    bitrixDealCategoryList(client),
     bitrixStatusListSource(client),
     bitrixStatusListLeadLostReason(client),
-    bitrixUserGet(client),
-    bitrixDealCategoryList(client),
   ]);
 
-  const sourceMap = new Map<string, string>();
-  for (const s of srcRes.result ?? []) {
-    if (s.STATUS_ID && s.NAME) sourceMap.set(s.STATUS_ID, s.NAME);
-  }
-  const lostMap = new Map<string, string>();
-  for (const s of lostRes.result ?? []) {
-    if (s.STATUS_ID && s.NAME) lostMap.set(s.STATUS_ID, s.NAME);
+  const usersRows = await fetchAllBitrixUsers(client, {
+    filter: { ACTIVE: "Y" },
+    select: ["ID", "NAME", "LAST_NAME", "EMAIL", "ACTIVE"],
+  });
+  console.log("Syncing managers (user.get ACTIVE=Y, paginated):", usersRows.length);
+  console.log(
+    "Manager IDs from Bitrix:",
+    usersRows.map((u) => u.ID),
+  );
+
+  try {
+    for (const row of srcRes.result ?? []) {
+      const ext = pickStr(row.STATUS_ID);
+      if (!ext) continue;
+      const name = pickStr(row.NAME)?.trim() || ext;
+      await prisma.crmDictionary.upsert({
+        where: {
+          crmType_entityId_externalId: {
+            crmType: "bitrix24",
+            entityId: "SOURCE",
+            externalId: ext,
+          },
+        },
+        create: {
+          crmType: "bitrix24",
+          entityId: "SOURCE",
+          externalId: ext,
+          name,
+        },
+        update: { name },
+      });
+    }
+    for (const row of lostRes.result ?? []) {
+      const ext = pickStr(row.STATUS_ID);
+      if (!ext) continue;
+      const name = pickStr(row.NAME)?.trim() || ext;
+      await prisma.crmDictionary.upsert({
+        where: {
+          crmType_entityId_externalId: {
+            crmType: "bitrix24",
+            entityId: "LEAD_LOST_REASON",
+            externalId: ext,
+          },
+        },
+        create: {
+          crmType: "bitrix24",
+          entityId: "LEAD_LOST_REASON",
+          externalId: ext,
+          name,
+        },
+        update: { name },
+      });
+    }
+    console.log("Bitrix24 справочники загружены:", {
+      sources: srcRes.result?.length ?? 0,
+      lostReasons: lostRes.result?.length ?? 0,
+    });
+  } catch (e) {
+    console.warn(
+      "Bitrix24: CrmDictionary (SOURCE / LEAD_LOST_REASON) не загружены:",
+      e,
+    );
   }
 
-  const managersByExt = new Map<string, string>();
+  try {
+    const leadPipeRes = await bitrixCrmStatusList(client, {
+      ENTITY_ID: "STATUS",
+    });
+    for (const row of leadPipeRes.result ?? []) {
+      const ext = pickStr(row.STATUS_ID);
+      if (!ext) continue;
+      const { isSuccess, isLost } = leadStageSemantics(row);
+      const sort = Number(row.SORT ?? 0);
+      await prisma.pipelineStage.upsert({
+        where: {
+          connectionId_entityType_externalId_crmType: {
+            connectionId: conn.id,
+            entityType: "lead",
+            externalId: ext,
+            crmType: "bitrix24",
+          },
+        },
+        create: {
+          connectionId: conn.id,
+          entityType: "lead",
+          externalId: ext,
+          name: pickStr(row.NAME)?.trim() || ext,
+          sort: Number.isFinite(sort) ? sort : 0,
+          isSuccess,
+          isLost,
+          color: pickStr(row.COLOR) ?? null,
+          crmType: "bitrix24",
+        },
+        update: {
+          name: pickStr(row.NAME)?.trim() || ext,
+          sort: Number.isFinite(sort) ? sort : 0,
+          isSuccess,
+          isLost,
+          color: pickStr(row.COLOR) ?? null,
+        },
+      });
+    }
+  } catch (e) {
+    console.warn("Bitrix24: стадии лидов (crm.status.list STATUS) не загружены:", e);
+  }
 
-  for (const u of usersRes.result ?? []) {
+  const rawCategories = catRes.result;
+  const fromApi = Array.isArray(rawCategories) && rawCategories.length > 0
+    ? (rawCategories as Array<{
+        ID?: string | number;
+        NAME?: string;
+        SORT?: number;
+      }>)
+    : [];
+
+  let categoryZeroMeta: { NAME?: string; SORT?: number } | null = null;
+  try {
+    const zRes = await bitrixDealCategoryGet(client, { id: 0 });
+    const r = zRes.result;
+    if (r && typeof r === "object" && !Array.isArray(r)) {
+      const row = r as { NAME?: unknown; SORT?: unknown };
+      const nm = pickStr(row.NAME);
+      categoryZeroMeta = {
+        NAME: nm,
+        SORT: Number(row.SORT ?? 0),
+      };
+    }
+  } catch (e) {
+    console.warn("Bitrix24: crm.dealcategory.get id=0:", e);
+  }
+
+  /** Основная воронка (0) не всегда приходит в crm.dealcategory.list — имя из crm.dealcategory.get */
+  const categories: Array<{
+    ID?: string | number;
+    NAME?: string;
+    SORT?: number;
+  }> = [...fromApi];
+  if (!categories.some((c) => String(c.ID ?? "") === "0")) {
+    const zs =
+      categoryZeroMeta?.SORT !== undefined &&
+      Number.isFinite(Number(categoryZeroMeta.SORT))
+        ? Number(categoryZeroMeta.SORT)
+        : 0;
+    categories.unshift({
+      ID: "0",
+      NAME: categoryZeroMeta?.NAME || "Квалификационная воронка",
+      SORT: zs,
+    });
+  } else if (categoryZeroMeta) {
+    const zi = categories.findIndex((c) => String(c.ID ?? "") === "0");
+    if (zi >= 0) {
+      categories[zi] = {
+        ...categories[zi],
+        ...(categoryZeroMeta.NAME ? { NAME: categoryZeroMeta.NAME } : {}),
+        ...(categoryZeroMeta.SORT !== undefined &&
+        Number.isFinite(Number(categoryZeroMeta.SORT))
+          ? { SORT: Number(categoryZeroMeta.SORT) }
+          : {}),
+      };
+    }
+  }
+
+  for (const cat of categories) {
+    const catId = cat.ID != null ? String(cat.ID) : "0";
+    const pname = pickStr(cat.NAME) || `Воронка ${catId}`;
+    const psort = Number(cat.SORT ?? 0);
+    await prisma.dealPipeline.upsert({
+      where: {
+        connectionId_externalId_crmType: {
+          connectionId: conn.id,
+          externalId: catId,
+          crmType: "bitrix24",
+        },
+      },
+      create: {
+        connectionId: conn.id,
+        externalId: catId,
+        name: pname,
+        sort: Number.isFinite(psort) ? psort : 0,
+        crmType: "bitrix24",
+      },
+      update: {
+        name: pname,
+        sort: Number.isFinite(psort) ? psort : 0,
+      },
+    });
+  }
+
+  try {
+    for (const cat of categories) {
+      const catId = cat.ID != null ? String(cat.ID) : "0";
+      let stRes =
+        catId === "0"
+          ? await bitrixCrmStatusList(client, {
+              ENTITY_ID: "DEAL_STAGE",
+              CATEGORY_ID: "0",
+            })
+          : await bitrixCrmStatusList(client, {
+              ENTITY_ID: `DEAL_STAGE_${catId}`,
+            });
+      if ((stRes.result?.length ?? 0) === 0 && catId === "0") {
+        stRes = await bitrixCrmStatusList(client, {
+          ENTITY_ID: "DEAL_STAGE",
+          CATEGORY_ID: 0,
+        });
+      }
+      if ((stRes.result?.length ?? 0) === 0 && catId !== "0") {
+        stRes = await bitrixCrmStatusList(client, {
+          ENTITY_ID: "DEAL_STAGE",
+          CATEGORY_ID: catId,
+        });
+      }
+      for (const row of stRes.result ?? []) {
+        const ext = pickStr(row.STATUS_ID);
+        if (!ext) continue;
+        const { isSuccess, isLost } = dealStageSemantics(row);
+        const sort = Number(row.SORT ?? 0);
+        await prisma.pipelineStage.upsert({
+          where: {
+            connectionId_entityType_externalId_crmType: {
+              connectionId: conn.id,
+              entityType: "deal",
+              externalId: ext,
+              crmType: "bitrix24",
+            },
+          },
+          create: {
+            connectionId: conn.id,
+            entityType: "deal",
+            externalId: ext,
+            name: pickStr(row.NAME)?.trim() || ext,
+            sort: Number.isFinite(sort) ? sort : 0,
+            isSuccess,
+            isLost,
+            color: pickStr(row.COLOR) ?? null,
+            categoryExternalId: catId,
+            crmType: "bitrix24",
+          },
+          update: {
+            name: pickStr(row.NAME)?.trim() || ext,
+            sort: Number.isFinite(sort) ? sort : 0,
+            isSuccess,
+            isLost,
+            color: pickStr(row.COLOR) ?? null,
+            categoryExternalId: catId,
+          },
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("Bitrix24: стадии сделок (DEAL_STAGE) не загружены:", e);
+  }
+
+  const removedManagers = await prisma.manager.deleteMany({
+    where: { crmType: "bitrix24" },
+  });
+  console.warn(
+    "Bitrix24 sync: удалены записи Manager (bitrix24) перед пересборкой из user.get:",
+    removedManagers.count,
+    "(PlanTarget по менеджерам — onDelete: Cascade)",
+  );
+
+  let managersCount = 0;
+  for (const u of usersRows) {
     const ext = u.ID ? String(u.ID) : "";
     if (!ext) continue;
     const name =
       [u.NAME, u.LAST_NAME].filter(Boolean).join(" ").trim() || "Менеджер";
-    const mgr = await prisma.manager.upsert({
+    const a = u.ACTIVE;
+    const isActive =
+      a === false ||
+      a === "N" ||
+      a === "n" ||
+      a === 0 ||
+      a === "0"
+        ? false
+        : true;
+
+    /** externalId = Bitrix user.ID (user.get), совпадает с ASSIGNED_BY_ID в сделках. */
+    await prisma.manager.upsert({
       where: {
         externalId_crmType: { externalId: ext, crmType: "bitrix24" },
       },
@@ -110,139 +377,26 @@ export async function syncBitrix24Connection(
         crmType: "bitrix24",
         name,
         email: u.EMAIL ?? null,
+        isActive,
       },
-      update: { name, email: u.EMAIL ?? null },
+      update: { name, email: u.EMAIL ?? null, isActive },
     });
-    managersByExt.set(ext, mgr.id);
-  }
-
-  const leadsRows = await fetchAllLeads(client, {
-    select: [...LEAD_SELECT],
-    filter: {},
-    order: { DATE_CREATE: "DESC" },
-  });
-
-  const dealsRows = await fetchAllDeals(client, {
-    select: [...DEAL_SELECT],
-    filter: {},
-    order: { DATE_CREATE: "DESC" },
-  });
-
-  const maps = { sourceById: sourceMap, lostReasonById: lostMap };
-
-  for (const row of leadsRows) {
-    const u = normalizeUnifiedLead(mapBitrixLeadToUnified(row, maps));
-    const managerId = u.managerExternalId
-      ? managersByExt.get(u.managerExternalId) ?? null
-      : null;
-
-    await prisma.lead.upsert({
-      where: {
-        externalId_crmType: {
-          externalId: u.externalId,
-          crmType: "bitrix24",
-        },
-      },
-      create: {
-        externalId: u.externalId,
-        crmType: "bitrix24",
-        connectionId: conn.id,
-        name: u.name,
-        phone: u.phone,
-        email: u.email,
-        source: u.source,
-        utmSource: u.utmSource,
-        utmMedium: u.utmMedium,
-        utmCampaign: u.utmCampaign,
-        utmContent: u.utmContent,
-        gclid: u.gclid,
-        fbclid: u.fbclid,
-        managerId,
-        status: u.status,
-        amount: u.amount,
-        failReason: u.failReason,
-        createdAt: u.createdAt,
-        closedAt: u.closedAt,
-      },
-      update: {
-        name: u.name,
-        phone: u.phone,
-        email: u.email,
-        source: u.source,
-        utmSource: u.utmSource,
-        utmMedium: u.utmMedium,
-        utmCampaign: u.utmCampaign,
-        utmContent: u.utmContent,
-        gclid: u.gclid,
-        fbclid: u.fbclid,
-        managerId,
-        status: u.status,
-        amount: u.amount,
-        failReason: u.failReason,
-        createdAt: u.createdAt,
-        closedAt: u.closedAt,
-        syncedAt: new Date(),
-      },
-    });
-  }
-
-  for (const row of dealsRows) {
-    const d = mapBitrixDealToUnified(row, sourceMap);
-    const managerId = d.managerExternalId
-      ? managersByExt.get(d.managerExternalId) ?? null
-      : null;
-
-    await prisma.deal.upsert({
-      where: {
-        externalId_crmType: {
-          externalId: d.externalId,
-          crmType: "bitrix24",
-        },
-      },
-      create: {
-        externalId: d.externalId,
-        crmType: "bitrix24",
-        connectionId: conn.id,
-        managerId,
-        amount: d.amount,
-        source: d.source,
-        createdAt: d.createdAt,
-        closedAt: d.closedAt,
-      },
-      update: {
-        managerId,
-        amount: d.amount,
-        source: d.source,
-        createdAt: d.createdAt,
-        closedAt: d.closedAt,
-      },
-    });
+    managersCount += 1;
   }
 
   const finishedAt = new Date();
-
   await prisma.crmConnection.update({
     where: { id: conn.id },
     data: { lastSyncAt: finishedAt },
   });
 
-  await prisma.syncLog.create({
-    data: {
-      connectionId: conn.id,
-      crmType: "bitrix24",
-      leadsCount: leadsRows.length,
-      dealsCount: dealsRows.length,
-      startedAt,
-      finishedAt,
-    },
-  });
+  const dealsCategoriesCount = categories.length;
 
-  const categories = catRes.result;
-  const dealsCategoriesCount = Array.isArray(categories) ? categories.length : 0;
+  const pipelinesCount = categories.length;
 
   return {
-    leadsCount: leadsRows.length,
-    dealsCount: dealsRows.length,
+    pipelinesCount,
+    managersCount,
     dealsCategoriesCount,
   };
 }

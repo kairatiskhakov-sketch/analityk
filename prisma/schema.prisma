@@ -7,16 +7,44 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// --- NextAuth.js ---
+enum Role {
+  ADMIN
+  MANAGER
+}
+
+// --- NextAuth.js + Saldo CRM пользователи ---
 model User {
   id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
+  name          String
+  email         String    @unique
   emailVerified DateTime?
   image         String?
+  password      String
+  role          Role      @default(MANAGER)
+  initials      String?
+  telegramId    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
   accounts      Account[]
   sessions      Session[]
   telegramChats TelegramChat[]
+  dashboardModules DashboardModule[]
+}
+
+/// Включённые блоки дашборда на пользователя
+model DashboardModule {
+  id         String   @id @default(cuid())
+  userId     String
+  moduleKey  String
+  isEnabled  Boolean  @default(true)
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, moduleKey])
+  @@index([userId])
 }
 
 model Account {
@@ -61,9 +89,12 @@ model CrmConnection {
   isActive   Boolean   @default(false)
   lastSyncAt DateTime?
 
-  bitrixDomain        String?
-  bitrixWebhookToken  String?
-  bitrixUserId        String?
+  bitrixDomain          String?
+  bitrixWebhookToken    String?
+  /// ID пользователя из сегмента URL вебхука (/rest/{id}/)
+  bitrixUserId          String?
+  /// ID пользователя из ответа profile (для отображения)
+  bitrixProfileUserId   String?
 
   amoSubdomain       String?
   amoClientId        String?
@@ -72,13 +103,61 @@ model CrmConnection {
   amoRefreshToken    String?
   amoTokenExpiresAt  DateTime?
 
-  leads Lead[]
-  deals Deal[]
+  pipelineStages PipelineStage[]
+  dealPipelines  DealPipeline[]
+}
+
+/// Кеш справочников Bitrix (SOURCE, причины отказа и т.д.) для расшифровки ID
+model CrmDictionary {
+  id         String   @id @default(cuid())
+  crmType    String
+  entityId   String
+  externalId String
+  name       String
+  extra      String?  @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([crmType, entityId, externalId])
+  @@index([crmType, entityId])
+}
+
+/// Воронки сделок Bitrix24 (кеш справочника)
+model DealPipeline {
+  id           String        @id @default(cuid())
+  connectionId String
+  connection   CrmConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  externalId   String
+  name         String
+  sort         Int           @default(0)
+  crmType      String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([connectionId, externalId, crmType])
+}
+
+/// Стадии воронки (кеш справочника)
+model PipelineStage {
+  id                 String        @id @default(cuid())
+  connectionId       String
+  connection         CrmConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  entityType         String // "lead" | "deal"
+  externalId         String
+  name               String
+  sort               Int
+  isSuccess          Boolean       @default(false)
+  isLost             Boolean       @default(false)
+  color              String?
+  categoryExternalId String?
+  crmType            String
+
+  @@unique([connectionId, entityType, externalId, crmType])
 }
 
 model GoogleConnection {
-  id     String @id @default(cuid())
-  email  String
+  id             String   @id @default(cuid())
+  email          String
   accessToken    String
   refreshToken   String
   tokenExpiresAt DateTime
@@ -127,39 +206,7 @@ model TelegramChat {
   @@unique([chatId, connectionId])
 }
 
-model Lead {
-  id           String @id @default(cuid())
-  externalId   String
-  crmType      String
-  connectionId String
-  connection   CrmConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-
-  name  String
-  phone String?
-  email String?
-
-  source      String
-  utmSource   String?
-  utmMedium   String?
-  utmCampaign String?
-  utmContent  String?
-  gclid       String?
-  fbclid      String?
-
-  managerId String?
-  manager   Manager? @relation(fields: [managerId], references: [id])
-
-  status     String
-  amount     Float   @default(0)
-  failReason String?
-
-  createdAt DateTime
-  closedAt  DateTime?
-  syncedAt  DateTime  @default(now())
-
-  @@unique([externalId, crmType])
-}
-
+/// Кеш пользователей CRM (Bitrix user id → имя)
 model Manager {
   id         String @id @default(cuid())
   externalId String
@@ -167,26 +214,25 @@ model Manager {
   name       String
   email      String?
   telegramId String?
-  leads      Lead[]
-  deals      Deal[]
+  isActive   Boolean @default(true)
+
+  planTargets PlanTarget[]
 
   @@unique([externalId, crmType])
 }
 
-model Deal {
-  id           String @id @default(cuid())
-  externalId   String
-  crmType      String
-  connectionId String
-  connection   CrmConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  managerId    String?
-  manager      Manager?      @relation(fields: [managerId], references: [id])
-  amount       Float
-  source       String?
-  createdAt    DateTime
-  closedAt     DateTime?
+/// План продаж по периодам (команда и менеджеры)
+model PlanTarget {
+  id         String   @id @default(cuid())
+  period     String // "2026-04" | "2026-Q2" | "2026"
+  periodType String // "month" | "quarter" | "year"
+  managerId  String? // null = общий план на команду
+  target     Float
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  manager    Manager? @relation(fields: [managerId], references: [id], onDelete: Cascade)
 
-  @@unique([externalId, crmType])
+  @@unique([period, periodType, managerId])
 }
 
 model SalesPlan {
@@ -197,13 +243,18 @@ model SalesPlan {
   createdAt DateTime @default(now())
 }
 
-model SyncLog {
+/// Пользовательская классификация стадий сделок Bitrix24 для аналитики
+model StageConfig {
   id           String   @id @default(cuid())
-  connectionId String
-  crmType      String
-  leadsCount   Int
-  dealsCount   Int
-  errors       String?
-  startedAt    DateTime
-  finishedAt   DateTime
+  externalId   String
+  name         String
+  pipelineId   String
+  pipelineName String
+  crmType      String   @default("bitrix24")
+  type         String
+  color        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([externalId, crmType])
 }

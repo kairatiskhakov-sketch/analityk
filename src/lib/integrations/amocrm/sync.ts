@@ -1,20 +1,12 @@
 import { encrypt, decrypt } from "@/lib/crypto";
 import { prisma } from "@/lib/prisma";
-import { normalizeUnifiedLead } from "@/lib/integrations/shared/mapper";
 import { createAmoClient } from "./client";
-import {
-  amoFetchAllLeads,
-  amoFetchAllUsers,
-  amoListLossReasons,
-  amoListPipelines,
-} from "./methods";
-import { mapAmoLeadToUnified } from "./mapper";
+import { amoFetchAllUsers } from "./methods";
 import { amoTokenExpiresAt, refreshAmoAccessToken } from "./oauth";
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 export type AmoSyncResult = {
-  leadsCount: number;
   managersCount: number;
 };
 
@@ -76,7 +68,7 @@ export async function refreshAmoTokensIfNeeded(
 }
 
 /**
- * Полная синхронизация лидов AmoCRM → БД.
+ * Кеш менеджеров AmoCRM в таблице Manager. Лиды в БД не сохраняются.
  */
 export async function syncAmoConnection(
   connectionId: string,
@@ -95,23 +87,12 @@ export async function syncAmoConnection(
   const accessToken = await ensureAmoAccessToken(conn);
   const client = createAmoClient(conn.amoSubdomain!, accessToken);
 
-  const startedAt = new Date();
+  const users = await amoFetchAllUsers(client);
 
-  const [pipelines, lossReasons, users] = await Promise.all([
-    amoListPipelines(client),
-    amoListLossReasons(client),
-    amoFetchAllUsers(client),
-  ]);
-
-  const lossReasonById = new Map<number, string>();
-  for (const r of lossReasons) {
-    lossReasonById.set(r.id, r.name);
-  }
-
-  const managersByExt = new Map<string, string>();
+  let managersCount = 0;
   for (const u of users) {
     const ext = String(u.id);
-    const mgr = await prisma.manager.upsert({
+    await prisma.manager.upsert({
       where: {
         externalId_crmType: { externalId: ext, crmType: "amocrm" },
       },
@@ -126,88 +107,13 @@ export async function syncAmoConnection(
         email: u.email ?? null,
       },
     });
-    managersByExt.set(ext, mgr.id);
+    managersCount += 1;
   }
-
-  const leadsRows = await amoFetchAllLeads(client);
-  const ctx = { pipelines, lossReasonById };
-
-  for (const row of leadsRows) {
-    const u = normalizeUnifiedLead(mapAmoLeadToUnified(row, ctx));
-    const managerId = u.managerExternalId
-      ? managersByExt.get(u.managerExternalId) ?? null
-      : null;
-
-    await prisma.lead.upsert({
-      where: {
-        externalId_crmType: {
-          externalId: u.externalId,
-          crmType: "amocrm",
-        },
-      },
-      create: {
-        externalId: u.externalId,
-        crmType: "amocrm",
-        connectionId: conn.id,
-        name: u.name,
-        phone: u.phone,
-        email: u.email,
-        source: u.source,
-        utmSource: u.utmSource,
-        utmMedium: u.utmMedium,
-        utmCampaign: u.utmCampaign,
-        utmContent: u.utmContent,
-        gclid: u.gclid,
-        fbclid: u.fbclid,
-        managerId,
-        status: u.status,
-        amount: u.amount,
-        failReason: u.failReason,
-        createdAt: u.createdAt,
-        closedAt: u.closedAt,
-      },
-      update: {
-        name: u.name,
-        phone: u.phone,
-        email: u.email,
-        source: u.source,
-        utmSource: u.utmSource,
-        utmMedium: u.utmMedium,
-        utmCampaign: u.utmCampaign,
-        utmContent: u.utmContent,
-        gclid: u.gclid,
-        fbclid: u.fbclid,
-        managerId,
-        status: u.status,
-        amount: u.amount,
-        failReason: u.failReason,
-        createdAt: u.createdAt,
-        closedAt: u.closedAt,
-        syncedAt: new Date(),
-      },
-    });
-  }
-
-  const finishedAt = new Date();
 
   await prisma.crmConnection.update({
     where: { id: conn.id },
-    data: { lastSyncAt: finishedAt },
+    data: { lastSyncAt: new Date() },
   });
 
-  await prisma.syncLog.create({
-    data: {
-      connectionId: conn.id,
-      crmType: "amocrm",
-      leadsCount: leadsRows.length,
-      dealsCount: 0,
-      startedAt,
-      finishedAt,
-    },
-  });
-
-  return {
-    leadsCount: leadsRows.length,
-    managersCount: managersByExt.size,
-  };
+  return { managersCount };
 }

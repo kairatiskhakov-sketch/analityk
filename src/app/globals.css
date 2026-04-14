@@ -3,31 +3,28 @@
 @tailwind utilities;
 
 :root {
-  --bg: #ffffff;
-  --surface: #f8f7f5;
-  --surface2: #f0ede9;
-  --border: #e8e6e2;
-  --border2: #d4d1cb;
-  --text: #1c1b18;
-  --muted: #787570;
-  --hint: #b0ada6;
-
-  --blue: #2359d6;
-  --blue-bg: #eef3fd;
-  --blue-mid: #85b7eb;
-
-  --green: #1a7a4a;
-  --green-bg: #edfaf3;
-
-  --red: #c73030;
-  --red-bg: #fef1f1;
-
-  --amber: #a05c10;
-  --amber-bg: #fef6ed;
+  --bg: #0a0a0a;
+  --surface: #111111;
+  --surface2: #1a1a1a;
+  --border: #222222;
+  --border2: #333333;
+  --text: #ffffff;
+  --muted: #888888;
+  --hint: #555555;
+  --accent: #c8ff00;
+  --accent-dim: rgba(200, 255, 0, 0.1);
+  --blue: #4488ff;
+  --blue-bg: rgba(68, 136, 255, 0.15);
+  --green: #c8ff00;
+  --green-bg: rgba(200, 255, 0, 0.15);
+  --red: #ff4444;
+  --red-bg: rgba(255, 68, 68, 0.15);
+  --amber: #ffaa00;
+  --amber-bg: rgba(255, 170, 0, 0.15);
 
   --r-sm: 7px;
   --r-md: 11px;
-  --r-lg: 15px;
+  --r-lg: 12px;
 }
 
 * {
@@ -38,6 +35,15 @@ body {
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+}
+
+.font-metric {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 ::-webkit-scrollbar {
@@ -63,8 +69,13 @@ body {
   }
 }
 .animate-fade-up {
-  animation: fadeUp 0.3s ease both;
+  animation: fadeUp 0.35s ease both;
 }
+
+.module-enter {
+  animation: fadeUp 0.35s ease both;
+}
+
 .delay-1 {
   animation-delay: 0.05s;
 }
@@ -76,4 +87,28 @@ body {
 }
 .delay-4 {
   animation-delay: 0.2s;
+}
+.delay-5 {
+  animation-delay: 0.25s;
+}
+.delay-6 {
+  animation-delay: 0.3s;
+}
+.delay-7 {
+  animation-delay: 0.35s;
+}
+.delay-8 {
+  animation-delay: 0.4s;
+}
+.delay-9 {
+  animation-delay: 0.45s;
+}
+.delay-10 {
+  animation-delay: 0.5s;
+}
+.delay-11 {
+  animation-delay: 0.55s;
+}
+.delay-12 {
+  animation-delay: 0.6s;
 }

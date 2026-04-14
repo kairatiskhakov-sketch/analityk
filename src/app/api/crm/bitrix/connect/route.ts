@@ -1,53 +1,120 @@
 import { encrypt } from "@/lib/crypto";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { normalizeBitrixDomain } from "@/lib/integrations/bitrix24/client";
+import { parseBitrixWebhookUrl } from "@/lib/integrations/bitrix24/parse-webhook";
+import { syncBitrix24Connection } from "@/lib/integrations/bitrix24/sync";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
 type Body = {
-  connectionId?: string;
-  domain: string;
-  userId: string;
-  webhookToken: string;
+  webhookUrl?: string;
 };
+
+type BitrixProfileResult = {
+  result?: { ID?: string | number };
+  error?: string;
+  error_description?: string;
+};
+
+async function fetchBitrixProfile(webhookBase: string): Promise<BitrixProfileResult> {
+  const base = webhookBase.trim().replace(/\/?$/, "/");
+  const res = await fetch(`${base}profile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+    cache: "no-store",
+  });
+  const data = (await res.json()) as BitrixProfileResult;
+  if (!res.ok) {
+    throw new Error(
+      data.error_description ?? data.error ?? `HTTP ${res.status}`,
+    );
+  }
+  return data;
+}
 
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body;
-    if (!body.domain?.trim() || !body.userId?.trim() || !body.webhookToken?.trim()) {
-      return jsonError("Нужны domain, userId, webhookToken");
+    const raw = body.webhookUrl?.trim();
+    if (!raw) {
+      return jsonError("Укажите URL вебхука", 400);
+    }
+    if (!raw.startsWith("https://")) {
+      return jsonError("Некорректный URL вебхука (нужен https://)", 400);
     }
 
-    const domain = normalizeBitrixDomain(body.domain);
-    const enc = encrypt(body.webhookToken.trim());
-
-    if (body.connectionId) {
-      const updated = await prisma.crmConnection.update({
-        where: { id: body.connectionId },
-        data: {
-          crmType: "bitrix24",
-          isActive: true,
-          bitrixDomain: domain,
-          bitrixUserId: body.userId.trim(),
-          bitrixWebhookToken: enc,
-        },
-      });
-      return jsonOk({ connection: updated });
+    let parsed: ReturnType<typeof parseBitrixWebhookUrl>;
+    try {
+      parsed = parseBitrixWebhookUrl(raw);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Неверный формат URL";
+      return jsonError(msg, 400);
     }
 
-    const created = await prisma.crmConnection.create({
-      data: {
-        crmType: "bitrix24",
-        isActive: true,
-        bitrixDomain: domain,
-        bitrixUserId: body.userId.trim(),
-        bitrixWebhookToken: enc,
-      },
+    let profileData: BitrixProfileResult;
+    try {
+      profileData = await fetchBitrixProfile(raw);
+    } catch {
+      return jsonError(
+        "Bitrix24 не ответил. Проверь URL и права вебхука.",
+        400,
+      );
+    }
+
+    const profileId = profileData.result?.ID;
+    if (profileId == null || profileId === "") {
+      return jsonError(
+        "Bitrix24 не ответил. Проверь URL и права вебхука.",
+        400,
+      );
+    }
+
+    const domain = normalizeBitrixDomain(parsed.domain);
+    const enc = encrypt(parsed.webhookToken);
+    const profileUserId = String(profileId);
+
+    const existing = await prisma.crmConnection.findFirst({
+      where: { crmType: "bitrix24" },
     });
-    return jsonOk({ connection: created });
+
+    const connection = existing
+      ? await prisma.crmConnection.update({
+          where: { id: existing.id },
+          data: {
+            isActive: true,
+            bitrixDomain: domain,
+            bitrixUserId: parsed.userId,
+            bitrixWebhookToken: enc,
+            bitrixProfileUserId: profileUserId,
+            lastSyncAt: new Date(),
+          },
+        })
+      : await prisma.crmConnection.create({
+          data: {
+            crmType: "bitrix24",
+            isActive: true,
+            bitrixDomain: domain,
+            bitrixUserId: parsed.userId,
+            bitrixWebhookToken: enc,
+            bitrixProfileUserId: profileUserId,
+            lastSyncAt: new Date(),
+          },
+        });
+
+    void syncBitrix24Connection(connection.id).catch((err) => {
+      console.error("Bitrix24 loadDictionaries:", err);
+    });
+
+    return jsonOk({
+      success: true,
+      domain,
+      userId: profileUserId,
+      connectionId: connection.id,
+    });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Ошибка";
+    const msg = e instanceof Error ? e.message : "Не удалось подключиться к Bitrix24";
     return jsonError(msg, 500);
   }
 }

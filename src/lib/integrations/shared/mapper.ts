@@ -18,6 +18,8 @@ export type UnifiedLead = {
   fbclid?: string | null;
   managerExternalId?: string | null;
   status: string;
+  /** Сырой STATUS_ID CRM (Bitrix и т.д.) — воронка по стадиям */
+  stageExternalId?: string | null;
   amount: number;
   failReason?: string | null;
   createdAt: Date;
@@ -58,6 +60,7 @@ export function normalizeUnifiedLead(lead: UnifiedLead): UnifiedLead {
     gclid: lead.gclid?.trim() || null,
     fbclid: lead.fbclid?.trim() || null,
     failReason: lead.failReason?.trim() || null,
+    stageExternalId: lead.stageExternalId?.trim() || null,
   };
 }
 

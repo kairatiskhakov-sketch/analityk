@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import { Toaster } from "sonner";
+import { AuthSessionProvider } from "@/components/providers/session-provider";
 import "./globals.css";
 
 const inter = Inter({
@@ -7,8 +9,14 @@ const inter = Inter({
   display: "swap",
 });
 
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin", "cyrillic"],
+  display: "swap",
+  variable: "--font-mono",
+});
+
 export const metadata: Metadata = {
-  title: "CRM Sales Analytics",
+  title: "Saldo CRM — аналитика продаж",
   description: "Sales analytics dashboard",
 };
 
@@ -19,7 +27,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ru">
-      <body className={`${inter.className} antialiased`}>{children}</body>
+      <body
+        className={`${inter.className} ${jetbrainsMono.variable} antialiased`}
+      >
+        <AuthSessionProvider>{children}</AuthSessionProvider>
+        <Toaster richColors theme="dark" position="top-right" />
+      </body>
     </html>
   );
 }

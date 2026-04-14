@@ -16,6 +16,7 @@ const config: Config = {
         text: "var(--text)",
         muted: "var(--muted)",
         hint: "var(--hint)",
+        accent: "var(--accent)",
         blue: "var(--blue)",
         green: "var(--green)",
         red: "var(--red)",

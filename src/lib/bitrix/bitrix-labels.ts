@@ -15,10 +15,12 @@ export function resolveBitrixSourceLabel(
   rawId: string | undefined,
   nameById: Map<string, string>,
 ): string {
-  const id = (rawId ?? "").toString().trim() || "OTHER";
+  const id = (rawId ?? "").toString().trim();
+  const norm = id.toUpperCase() || "OTHER";
   return (
     nameById.get(id) ??
-    BITRIX_DEFAULT_SOURCES[id] ??
+    nameById.get(norm) ??
+    BITRIX_DEFAULT_SOURCES[norm] ??
     (rawId ? String(rawId) : "Другое")
   );
 }

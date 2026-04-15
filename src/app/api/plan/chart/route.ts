@@ -26,6 +26,9 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const period = searchParams.get("period");
     const periodType = parsePeriodType(searchParams.get("periodType"));
+    const pipelineId = searchParams.get("pipelineId")?.trim() || undefined;
+    const stageIds =
+      searchParams.get("stageIds")?.split(",").map((v) => v.trim()).filter(Boolean) || [];
     if (!period || !periodType) {
       return jsonError("Укажите period и periodType", 400);
     }
@@ -48,15 +51,15 @@ export async function GET(req: Request) {
     const [wonStageIds, stageConfigs, deals] = await Promise.all([
       getOrSyncWonStageIds(url),
       getStageConfigs(),
-      fetchDealsMergedByChunks(url, df, dt, PLAN_FACT_DEAL_SELECT),
+      fetchDealsMergedByChunks(url, df, dt, PLAN_FACT_DEAL_SELECT, pipelineId),
     ]);
     const series = buildPlanVsFactSeries(
       deals,
       teamTarget,
       period,
       periodType,
-      wonStageIds,
-      stageConfigs,
+      stageIds.length ? stageIds : wonStageIds,
+      stageIds.length ? undefined : stageConfigs,
     );
 
     return jsonOk({ series });

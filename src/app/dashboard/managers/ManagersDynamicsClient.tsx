@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Bar,
   BarChart,
@@ -16,75 +15,90 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { GroupBy } from "@/lib/dashboard/manager-dynamics";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { Card, CardHeader, PageTopBar } from "@/components/ui";
-import { ManagerSelect } from "@/components/ui/ManagerSelect";
-import { PeriodSelector } from "@/components/ui/PeriodSelector";
-import { useModules } from "@/hooks/useModules";
+import { GlobalFilters } from "@/components/ui/GlobalFilters";
 import type { Period } from "@/lib/dashboard/range";
 
-type Mgr = { id: string; name: string };
-
-type DynPayload = {
-  groupBy: GroupBy;
-  managers: { externalId: string; name: string }[];
-  buckets: {
-    key: string;
-    label: string;
-    byManager: Record<
-      string,
-      { leads: number; deals: number; salesAmount: number; conversion: number }
-    >;
-  }[];
-  lineChart: Record<string, string | number>[];
-  table: {
-    externalId: string;
-    name: string;
-    leads: number;
-    deals: number;
-    salesAmount: number;
-    conversion: number;
-    trendPct: number | null;
-    planTarget: number | null;
-    planMet: boolean;
-  }[];
-  barChart: {
-    externalId: string;
-    name: string;
-    amount: number;
-    planMet: boolean;
-    planTarget: number | null;
-  }[];
-};
+type GroupBy = "day" | "week";
+type MetricMode = "amount" | "deals" | "conversion";
+type SortKey =
+  | "name"
+  | "totalLeads"
+  | "wonDeals"
+  | "totalAmount"
+  | "conversion"
+  | "avgDeal"
+  | "avgCloseDays"
+  | "lostDeals"
+  | "activeDeals"
+  | "trendPct";
 
 const LINE_COLORS = [
-  "#c8ff00",
-  "#4488ff",
-  "#ff4444",
-  "#ffaa00",
-  "#888888",
-  "#666666",
-  "#44aa88",
-  "#aa66cc",
+  "#7B5CF5",
+  "#00E676",
+  "#448AFF",
+  "#FFD740",
+  "#E040FB",
+  "#FF5252",
+  "#00BCD4",
+  "#FF9800",
 ];
 
-function buildQuery(
-  sp: URLSearchParams,
-  overrides: Record<string, string | undefined>,
-): string {
-  const q = new URLSearchParams(sp.toString());
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v === undefined || v === "") q.delete(k);
-    else q.set(k, v);
-  }
-  return q.toString();
+type ManagerStatsRow = {
+  id: string;
+  externalId: string;
+  name: string;
+  totalLeads: number;
+  wonDeals: number;
+  lostDeals: number;
+  activeDeals: number;
+  totalAmount: number;
+  avgDeal: number;
+  conversion: number;
+  avgCloseDays: number;
+  failRate: number;
+  topSources: { name: string; count: number }[];
+  topFailReasons: { name: string; count: number }[];
+  byPipeline: { pipelineId: string; pipelineName: string; deals: number; amount: number }[];
+  trendPct: number;
+  plan: number | null;
+  planProgress: number | null;
+};
+
+type StatsPayload = {
+  kpi: {
+    activeManagers: number;
+    bestManager: { name: string; amount: number } | null;
+    avgConversion: number;
+    avgCloseDays: number;
+  } | null;
+  managers: ManagerStatsRow[];
+  compare: { managerId: string; name: string; current: number; previous: number; changePct: number }[];
+};
+
+type DynamicsPayload = {
+  managerId: string;
+  name: string;
+  data: { date: string; amount: number; deals: number }[];
+}[];
+
+function initials(name: string) {
+  const p = name.trim().split(/\s+/).filter(Boolean);
+  if (!p.length) return "?";
+  if (p.length === 1) return p[0].slice(0, 2).toUpperCase();
+  return `${p[0][0]}${p[1][0]}`.toUpperCase();
+}
+
+function conversionColor(v: number) {
+  if (v > 40) return "var(--green)";
+  if (v >= 20) return "var(--amber)";
+  return "var(--red)";
 }
 
 export function ManagersDynamicsClient({
   dateFrom,
   dateTo,
-  preset,
   rangeLabel,
 }: {
   dateFrom: string;
@@ -92,517 +106,299 @@ export function ManagersDynamicsClient({
   preset: Period;
   rangeLabel: string;
 }) {
-  const router = useRouter();
   const sp = useSearchParams();
-  const { isEnabled } = useModules();
-  const showDynamicsMod = isEnabled("managers_dynamics");
-  const showRatingMod = isEnabled("managers_rating");
+  const [stats, setStats] = useState<StatsPayload | null>(null);
+  const [dynamics, setDynamics] = useState<DynamicsPayload>([]);
+  const [compare, setCompare] = useState<StatsPayload["compare"]>([]);
+  const [groupBy, setGroupBy] = useState<GroupBy>("day");
+  const [metricMode, setMetricMode] = useState<MetricMode>("amount");
+  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("totalAmount");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const [managers, setManagers] = useState<Mgr[]>([]);
-  const [selManagers, setSelManagers] = useState<string[]>([]);
-  const [groupBy, setGroupBy] = useState<GroupBy>(() => {
-    const g = sp.get("groupBy");
-    return g === "day" || g === "week" || g === "month" ? g : "week";
-  });
-  const [dyn, setDyn] = useState<DynPayload | null>(null);
-  const [ranking, setRanking] = useState<
-    { name: string; deals: number; amount: number }[]
-  >([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const qDynamics = useMemo(() => {
+  const query = useMemo(() => {
     const q = new URLSearchParams({
       dateFrom: sp.get("dateFrom") ?? dateFrom,
       dateTo: sp.get("dateTo") ?? dateTo,
-      groupBy: sp.get("groupBy") ?? groupBy,
     });
-    const mids = sp.get("managerIds");
+    const mids = sp.get("managers");
     if (mids) q.set("managerIds", mids);
+    const pid = sp.get("pipelineId");
+    if (pid) q.set("pipelineId", pid);
     return q.toString();
-  }, [dateFrom, dateTo, groupBy, sp]);
+  }, [dateFrom, dateTo, sp]);
 
-  const qManagers = useMemo(() => {
-    const q = new URLSearchParams({
-      dateFrom: sp.get("dateFrom") ?? dateFrom,
-      dateTo: sp.get("dateTo") ?? dateTo,
-      preset: sp.get("preset") ?? preset,
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const [sRes, dRes, cRes] = await Promise.all([
+          fetch(`/api/managers/stats?${query}`, { cache: "no-store" }),
+          fetch(`/api/managers/dynamics?${query}&groupBy=${groupBy}`, { cache: "no-store" }),
+          fetch(`/api/managers/compare?${query}`, { cache: "no-store" }),
+        ]);
+        const sJson = (await sRes.json()) as StatsPayload;
+        const dJson = (await dRes.json()) as { data?: DynamicsPayload; error?: string };
+        const cJson = (await cRes.json()) as { rows?: StatsPayload["compare"] };
+        if (cancelled) return;
+        if (!sRes.ok || !dRes.ok || !cRes.ok) throw new Error("Ошибка загрузки");
+        setStats(sJson);
+        setDynamics(dJson.data ?? []);
+        setCompare(cJson.rows ?? sJson.compare ?? []);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Ошибка");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [query, groupBy]);
+
+  const barData = useMemo(() => {
+    const rows = stats?.managers ?? [];
+    return rows.map((m) => ({
+      name: m.name,
+      value:
+        metricMode === "amount"
+          ? m.totalAmount
+          : metricMode === "deals"
+            ? m.wonDeals
+            : m.conversion,
+      planProgress: m.planProgress,
+    }));
+  }, [stats, metricMode]);
+
+  const lineData = useMemo(() => {
+    const dates = new Set<string>();
+    for (const m of dynamics) for (const p of m.data) dates.add(p.date);
+    const sorted = Array.from(dates).sort();
+    return sorted.map((date) => {
+      const row: Record<string, string | number> = { date };
+      for (const m of dynamics) {
+        row[m.managerId] = m.data.find((x) => x.date === date)?.amount ?? 0;
+      }
+      return row;
     });
-    const mids = sp.get("managerIds");
-    if (mids) q.set("managerIds", mids);
-    return q.toString();
-  }, [dateFrom, dateTo, preset, sp]);
+  }, [dynamics]);
 
-  useEffect(() => {
-    const m = sp.get("managerIds");
-    setSelManagers(m ? m.split(",").filter(Boolean) : []);
-    const g = sp.get("groupBy");
-    if (g === "day" || g === "week" || g === "month") setGroupBy(g);
-  }, [sp]);
+  const sortedRows = useMemo(() => {
+    const rows = [...(stats?.managers ?? [])];
+    rows.sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      const base =
+        typeof av === "string" && typeof bv === "string"
+          ? av.localeCompare(bv, "ru")
+          : Number(av ?? 0) - Number(bv ?? 0);
+      return sortDir === "asc" ? base : -base;
+    });
+    return rows;
+  }, [stats, sortKey, sortDir]);
 
-  useEffect(() => {
-    let c = false;
-    fetch("/api/managers/list", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((j: { managers?: Mgr[] }) => {
-        if (!c) setManagers(j.managers ?? []);
-      })
-      .catch(() => {
-        if (!c) setManagers([]);
-      });
-    return () => {
-      c = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!showDynamicsMod) {
-      setDyn(null);
-      setLoadError(null);
-      return;
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setSortDir("desc");
     }
-    let c = false;
-    setLoadError(null);
-    fetch(`/api/managers/dynamics?${qDynamics}`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then(
-        (j: {
-          ok?: boolean;
-          hasCrm?: boolean;
-          data?: DynPayload | null;
-          error?: string | null;
-        }) => {
-          if (c) return;
-          if (!j.ok || j.error) {
-            setLoadError(j.error ?? "Ошибка загрузки");
-            setDyn(null);
-            return;
-          }
-          if (!j.hasCrm || !j.data) {
-            setDyn(null);
-            return;
-          }
-          setDyn(j.data);
-        },
-      )
-      .catch((e) => {
-        if (!c) {
-          setLoadError(e instanceof Error ? e.message : "Ошибка");
-          setDyn(null);
-        }
-      });
-    return () => {
-      c = true;
-    };
-  }, [qDynamics, showDynamicsMod]);
-
-  useEffect(() => {
-    if (!showRatingMod) {
-      setRanking([]);
-      return;
-    }
-    let c = false;
-    fetch(`/api/managers?${qManagers}`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then(
-        (j: {
-          ok?: boolean;
-          ranking?: { name: string; deals: number; amount: number }[];
-        }) => {
-          if (!c) setRanking(j.ranking ?? []);
-        },
-      )
-      .catch(() => {
-        if (!c) setRanking([]);
-      });
-    return () => {
-      c = true;
-    };
-  }, [qManagers, showRatingMod]);
-
-  const pushFilters = useCallback(
-    (overrides?: { managerIds?: string[]; groupBy?: GroupBy }) => {
-      const mids = overrides?.managerIds ?? selManagers;
-      const gb = overrides?.groupBy ?? groupBy;
-      const qs = buildQuery(sp, {
-        dateFrom: sp.get("dateFrom") ?? dateFrom,
-        dateTo: sp.get("dateTo") ?? dateTo,
-        preset: sp.get("preset") ?? preset,
-        managerIds: mids.length ? mids.join(",") : undefined,
-        groupBy: gb,
-      });
-      router.push(`/dashboard/managers?${qs}`);
-      router.refresh();
-    },
-    [dateFrom, dateTo, groupBy, preset, router, selManagers, sp],
-  );
-
-  const lineKeys = dyn?.managers ?? [];
-
-  const tipLine = (props: {
-    active?: boolean;
-    payload?: readonly { payload?: unknown }[];
-  }) => {
-    const { active, payload } = props;
-    if (!active || !payload?.length) return null;
-    const row = payload[0].payload as Record<string, string | number>;
-    const label = String(row.label ?? "");
-    const bucketKey = String(row.bucket ?? "");
-    const bucket = dyn?.buckets.find((b) => b.key === bucketKey);
-    const lines: { name: string; sales: number; deals: number }[] = [];
-    for (const m of lineKeys) {
-      const k = `sales_${m.externalId}`;
-      const sales = Number(row[k] ?? 0);
-      if (sales <= 0) continue;
-      const deals = bucket?.byManager[m.externalId]?.deals ?? 0;
-      lines.push({ name: m.name, sales, deals });
-    }
-    return (
-      <div
-        className="rounded-lg border px-3 py-2 text-[11px] shadow-lg"
-        style={{
-          background: "#1a1a1a",
-          borderColor: "#333333",
-          color: "#ffffff",
-        }}
-      >
-        <p className="font-medium">{label}</p>
-        {lines.map((l) => (
-          <p key={l.name}>
-            {l.name}: {formatCurrency(l.sales)} ₸ · сделок: {l.deals}
-          </p>
-        ))}
-      </div>
-    );
   };
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <PageTopBar
-        title="Менеджеры"
-        sub={`${rangeLabel} · динамика и рейтинг`}
-        right={null}
-      />
+      <PageTopBar title="Менеджеры" sub={`${rangeLabel} · аналитика по команде`} right={null} />
+      <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+        <GlobalFilters showStages={false} />
+        {loading ? <p style={{ color: "var(--hint)" }}>Загрузка...</p> : null}
+        {error ? <p style={{ color: "var(--red)" }}>{error}</p> : null}
 
-      <div className="flex-1 space-y-3 overflow-y-auto px-6 py-4">
-        <div
-          className="flex flex-col gap-3 rounded-[12px] border p-3 lg:flex-row lg:flex-wrap lg:items-end"
-          style={{ borderColor: "var(--border)", background: "var(--surface2)" }}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className="mb-1 block w-full text-[9.5px] font-medium uppercase tracking-wide lg:mb-0 lg:mr-2 lg:w-auto"
-              style={{ color: "var(--hint)" }}
-            >
-              Период
-            </span>
-            <PeriodSelector
-              basePath="/dashboard/managers"
-              initialPreset={preset}
-              initialDateFrom={dateFrom}
-              initialDateTo={dateTo}
-            />
-          </div>
-
-          <div className="min-w-[200px] flex-1">
-            <label
-              className="mb-1 block text-[9.5px] font-medium uppercase tracking-wide"
-              style={{ color: "var(--hint)" }}
-            >
-              Менеджеры
-            </label>
-            <ManagerSelect
-              managers={managers}
-              selected={selManagers}
-              onChange={(ids) => {
-                setSelManagers(ids);
-                pushFilters({ managerIds: ids });
-              }}
-            />
-          </div>
-
-          <div>
-            <span
-              className="mb-1 block text-[9.5px] font-medium uppercase tracking-wide"
-              style={{ color: "var(--hint)" }}
-            >
-              Группировка
-            </span>
-            <div className="flex flex-wrap gap-1">
-              {(
-                [
-                  ["day", "По дням"],
-                  ["week", "По неделям"],
-                  ["month", "По месяцам"],
-                ] as const
-              ).map(([id, label]) => {
-                const active = groupBy === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => {
-                      setGroupBy(id);
-                      pushFilters({ groupBy: id });
-                    }}
-                    className="rounded-[8px] px-2.5 py-1.5 text-[11.5px] font-semibold transition-all"
-                    style={{
-                      background: active ? "var(--accent)" : "transparent",
-                      color: active ? "#000000" : "var(--muted)",
-                      border: active ? "none" : "1px solid var(--border2)",
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => pushFilters()}
-            className="rounded-[10px] px-4 py-2 text-[13px] font-semibold transition-opacity hover:opacity-90"
-            style={{ background: "var(--accent)", color: "#000000" }}
-          >
-            Применить
-          </button>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Card><div className="p-4"><p className="text-[11px]" style={{ color: "var(--hint)" }}>Активных менеджеров</p><p className="mt-1 text-[24px] font-semibold">{formatNumber(stats?.kpi?.activeManagers ?? 0)}</p></div></Card>
+          <Card><div className="p-4"><p className="text-[11px]" style={{ color: "var(--hint)" }}>Лучший менеджер</p><p className="mt-1 text-[16px] font-semibold">{stats?.kpi?.bestManager?.name ?? "—"}</p><p className="text-[12px]" style={{ color: "var(--muted)" }}>{formatCurrency(stats?.kpi?.bestManager?.amount ?? 0)} ₸</p></div></Card>
+          <Card><div className="p-4"><p className="text-[11px]" style={{ color: "var(--hint)" }}>Средняя конверсия</p><p className="mt-1 text-[24px] font-semibold">{stats?.kpi?.avgConversion ?? 0}%</p></div></Card>
+          <Card><div className="p-4"><p className="text-[11px]" style={{ color: "var(--hint)" }}>Среднее время закрытия</p><p className="mt-1 text-[24px] font-semibold">{stats?.kpi?.avgCloseDays ?? 0} дн.</p></div></Card>
         </div>
 
-        {loadError ? (
-          <div
-            className="rounded-[11px] border px-4 py-3 text-[13px]"
-            style={{
-              background: "var(--red-bg)",
-              borderColor: "var(--border)",
-              color: "var(--red)",
-            }}
-          >
-            {loadError}
+        <Card>
+          <CardHeader title="Сравнительный график" sub="по менеджерам" />
+          <div className="flex gap-2 px-4 pb-2">
+            {[
+              ["amount", "Сумма продаж"],
+              ["deals", "Кол-во сделок"],
+              ["conversion", "Конверсия %"],
+            ].map(([id, label]) => (
+              <button key={id} onClick={() => setMetricMode(id as MetricMode)} className="rounded-[8px] px-2 py-1 text-[12px]" style={{ background: metricMode === id ? "var(--purple-bg)" : "transparent", color: metricMode === id ? "var(--purple2)" : "var(--muted)" }}>
+                {label}
+              </button>
+            ))}
           </div>
-        ) : null}
-
-        {!dyn && !loadError ? (
-          <p className="text-[13px]" style={{ color: "var(--hint)" }}>
-            Подключите Bitrix24 или подождите загрузку данных.
-          </p>
-        ) : null}
-
-        {showRatingMod && ranking.length > 0 ? (
-          <div
-            className="module-enter rounded-[12px] border p-4"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-          >
-            <p
-              className="text-[11px] font-semibold uppercase tracking-[0.1em]"
-              style={{ color: "var(--muted)" }}
-            >
-              Рейтинг по сумме продаж (выигранные сделки)
-            </p>
-            <div className="mt-3 space-y-3">
-              {(() => {
-                const maxAmt = Math.max(
-                  ...ranking.slice(0, 10).map((x) => x.amount),
-                  1,
-                );
-                return ranking.slice(0, 10).map((r, i) => (
-                  <div key={r.name} className="space-y-1">
-                    <div
-                      className="flex justify-between gap-2 text-[13px]"
-                      style={{
-                        color: i === 0 ? "var(--accent)" : "var(--text)",
-                      }}
-                    >
-                      <span className="font-medium">
-                        {i + 1}. {r.name}
-                      </span>
-                      <span
-                        className="shrink-0 tabular-nums"
-                        style={{ color: "var(--muted)" }}
-                      >
-                        {formatCurrency(r.amount)} ₸ · {r.deals} сделок
-                      </span>
-                    </div>
-                    <div
-                      className="h-2 overflow-hidden rounded-full"
-                      style={{ background: "var(--border)" }}
-                    >
-                      <div
-                        className="h-2 rounded-full transition-all"
-                        style={{
-                          width: `${Math.min(100, (r.amount / maxAmt) * 100)}%`,
-                          background:
-                            i === 0 ? "var(--accent)" : "rgba(200,255,0,0.35)",
-                        }}
-                      />
-                    </div>
-                  </div>
-                ));
-              })()}
-            </div>
+          <div className="h-80 p-2">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={barData} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis type="number" tick={{ fill: "rgba(255,255,255,0.35)", fontSize: 11 }} />
+                <YAxis type="category" dataKey="name" width={120} tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 11 }} />
+                <Tooltip />
+                <Bar dataKey="value" radius={[0, 6, 6, 0]}>
+                  {barData.map((r, idx) => {
+                    let color = "#7B5CF5";
+                    if (r.planProgress != null) color = r.planProgress >= 100 ? "#00E676" : r.planProgress >= 70 ? "#FFD740" : "#FF5252";
+                    return <Cell key={`${r.name}-${idx}`} fill={color} />;
+                  })}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
-        ) : null}
+        </Card>
 
-        {showDynamicsMod && dyn ? (
-          <>
-            <div className="module-enter grid gap-3 lg:grid-cols-2">
-              <Card className="min-h-80 min-w-0">
-                <CardHeader title="Динамика продаж" sub="сумма по выигранным сделкам, ₸" />
-                <div className="h-72 w-full min-w-0">
-                  {dyn.lineChart.length && lineKeys.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={dyn.lineChart}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
-                        <XAxis
-                          dataKey="label"
-                          tick={{ fill: "#555555", fontSize: 11 }}
-                          axisLine={false}
-                          tickLine={false}
-                        />
-                        <YAxis
-                          tick={{ fill: "#555555", fontSize: 11 }}
-                          axisLine={false}
-                          tickLine={false}
-                        />
-                        <Tooltip content={tipLine} />
-                        <Legend />
-                        {lineKeys.map((m, i) => (
-                          <Line
-                            key={m.externalId}
-                            type="monotone"
-                            dataKey={`sales_${m.externalId}`}
-                            name={m.name}
-                            stroke={LINE_COLORS[i % LINE_COLORS.length]}
-                            dot={false}
-                            strokeWidth={2}
-                          />
-                        ))}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <p className="p-4 text-[13px]" style={{ color: "var(--hint)" }}>
-                      Нет данных за период
-                    </p>
-                  )}
-                </div>
-              </Card>
+        <Card>
+          <CardHeader title="Динамика по менеджерам" sub="нарастающая сумма продаж" />
+          <div className="flex gap-2 px-4 pb-2">
+            {[
+              ["day", "По дням"],
+              ["week", "По неделям"],
+            ].map(([id, label]) => (
+              <button key={id} onClick={() => setGroupBy(id as GroupBy)} className="rounded-[8px] px-2 py-1 text-[12px]" style={{ background: groupBy === id ? "var(--purple-bg)" : "transparent", color: groupBy === id ? "var(--purple2)" : "var(--muted)" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="h-80 p-2">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={lineData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="date" tick={{ fill: "rgba(255,255,255,0.35)", fontSize: 11 }} />
+                <YAxis tick={{ fill: "rgba(255,255,255,0.35)", fontSize: 11 }} />
+                <Tooltip />
+                <Legend
+                  onClick={(e) => {
+                    const key = String((e as { dataKey?: string }).dataKey ?? "");
+                    if (!key) return;
+                    setHiddenSeries((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(key)) next.delete(key);
+                      else next.add(key);
+                      return next;
+                    });
+                  }}
+                />
+                {dynamics.map((m, i) => (
+                  <Line key={m.managerId} type="monotone" dataKey={m.managerId} name={m.name} stroke={LINE_COLORS[i % LINE_COLORS.length]} strokeWidth={2.5} dot={false} hide={hiddenSeries.has(m.managerId)} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
 
-              <Card className="min-h-80 min-w-0">
-                <CardHeader title="Сравнение за период" sub="план — месяц конца периода" />
-                <div className="h-72 w-full min-w-0">
-                  {dyn.barChart.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={dyn.barChart} layout="vertical">
-                        <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
-                        <XAxis
-                          type="number"
-                          tick={{ fill: "#555555", fontSize: 11 }}
-                          axisLine={false}
-                          tickLine={false}
-                        />
-                        <YAxis
-                          type="category"
-                          dataKey="name"
-                          width={100}
-                          tick={{ fill: "#555555", fontSize: 10 }}
-                          axisLine={false}
-                          tickLine={false}
-                        />
-                        <Tooltip
-                          formatter={(v) => [
-                            `${formatCurrency(Number(v ?? 0))} ₸`,
-                            "Сумма",
-                          ]}
-                          contentStyle={{
-                            background: "#1a1a1a",
-                            border: "1px solid #333333",
-                            borderRadius: 8,
-                            fontSize: 11,
-                            color: "#ffffff",
-                          }}
-                        />
-                        <Bar dataKey="amount" name="Сумма" radius={[0, 4, 4, 0]}>
-                          {dyn.barChart.map((r) => (
-                            <Cell
-                              key={r.externalId}
-                              fill={
-                                r.planTarget != null && r.planTarget > 0
-                                  ? r.planMet
-                                    ? "var(--accent)"
-                                    : "var(--red)"
-                                  : "var(--muted)"
-                              }
-                            />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <p className="p-4 text-[13px]" style={{ color: "var(--hint)" }}>
-                      Нет данных
-                    </p>
-                  )}
-                </div>
-              </Card>
-            </div>
-
-            <Card className="module-enter overflow-x-auto">
-              <CardHeader title="Сводка" sub="тренд к предыдущему периоду той же длины" />
-              <table className="w-full min-w-[640px] border-collapse text-[12px]">
-                <thead>
-                  <tr
-                    className="text-[10px] font-semibold uppercase tracking-wide"
-                    style={{ color: "var(--hint)" }}
-                  >
-                    <th className="py-2 text-left font-medium">Менеджер</th>
-                    <th className="py-2 text-right font-medium">Лидов</th>
-                    <th className="py-2 text-right font-medium">Сделок</th>
-                    <th className="py-2 text-right font-medium">Сумма</th>
-                    <th className="py-2 text-right font-medium">Конв.</th>
-                    <th className="py-2 text-right font-medium">Тренд</th>
+        <Card className="overflow-x-auto">
+          <CardHeader title="Детальная таблица менеджеров" sub="клик по строке раскрывает карточку" />
+          <table className="w-full min-w-[1100px] text-[12px]">
+            <thead>
+              <tr className="text-[11px] uppercase tracking-[0.1em]" style={{ color: "rgba(255,255,255,0.4)" }}>
+                <th className="py-2 text-left cursor-pointer" onClick={() => toggleSort("name")}>Менеджер</th>
+                <th className="py-2 text-right cursor-pointer" onClick={() => toggleSort("totalLeads")}>Лидов</th>
+                <th className="py-2 text-right cursor-pointer" onClick={() => toggleSort("wonDeals")}>Сделок</th>
+                <th className="py-2 text-right cursor-pointer" onClick={() => toggleSort("totalAmount")}>Сумма</th>
+                <th className="py-2 text-right cursor-pointer" onClick={() => toggleSort("conversion")}>Конверсия</th>
+                <th className="py-2 text-right cursor-pointer" onClick={() => toggleSort("avgDeal")}>Средний чек</th>
+                <th className="py-2 text-right cursor-pointer" onClick={() => toggleSort("avgCloseDays")}>Ср. время</th>
+                <th className="py-2 text-right cursor-pointer" onClick={() => toggleSort("lostDeals")}>Провалов</th>
+                <th className="py-2 text-right cursor-pointer" onClick={() => toggleSort("activeDeals")}>В работе</th>
+                <th className="py-2 text-right cursor-pointer" onClick={() => toggleSort("trendPct")}>Тренд</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map((m) => (
+                <>
+                  <tr key={m.id} className="cursor-pointer border-t transition-colors hover:bg-[rgba(255,255,255,0.04)]" style={{ borderColor: "rgba(255,255,255,0.05)" }} onClick={() => setExpandedId((x) => (x === m.id ? null : m.id))}>
+                    <td className="py-2">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-semibold" style={{ background: "linear-gradient(135deg,#7B5CF5,#E040FB)", color: "#fff" }}>{initials(m.name)}</span>
+                        {m.name}
+                      </div>
+                    </td>
+                    <td className="py-2 text-right">{m.totalLeads}</td>
+                    <td className="py-2 text-right">{m.wonDeals}</td>
+                    <td className="py-2 text-right">{formatCurrency(m.totalAmount)} ₸</td>
+                    <td className="py-2 text-right" style={{ color: conversionColor(m.conversion) }}>{m.conversion}%</td>
+                    <td className="py-2 text-right">{formatCurrency(m.avgDeal)} ₸</td>
+                    <td className="py-2 text-right">{m.avgCloseDays} дн.</td>
+                    <td className="py-2 text-right">{m.lostDeals} ({m.failRate}%)</td>
+                    <td className="py-2 text-right">{m.activeDeals}</td>
+                    <td className="py-2 text-right" style={{ color: m.trendPct >= 0 ? "var(--green)" : "var(--red)" }}>{m.trendPct >= 0 ? "↑" : "↓"} {Math.abs(m.trendPct)}%</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {dyn.table.map((r) => (
-                    <tr
-                      key={r.externalId}
-                      className="border-t transition-colors hover:bg-[#1a1a1a]"
-                      style={{ borderColor: "#1a1a1a", color: "var(--text)" }}
-                    >
-                      <td className="py-2 pr-2">{r.name}</td>
-                      <td className="py-2 text-right">{formatNumber(r.leads)}</td>
-                      <td className="py-2 text-right">{formatNumber(r.deals)}</td>
-                      <td className="py-2 text-right">{formatCurrency(r.salesAmount)} ₸</td>
-                      <td className="py-2 text-right">{r.conversion}%</td>
-                      <td
-                        className="py-2 text-right font-medium"
-                        style={{
-                          color:
-                            r.trendPct == null
-                              ? "var(--muted)"
-                              : r.trendPct >= 0
-                                ? "var(--green)"
-                                : "var(--red)",
-                        }}
-                      >
-                        {r.trendPct == null
-                          ? "—"
-                          : `${r.trendPct >= 0 ? "↑" : "↓"} ${r.trendPct > 0 ? "+" : ""}${r.trendPct}%`}
+                  {expandedId === m.id ? (
+                    <tr key={`${m.id}-expanded`} className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+                      <td colSpan={10} className="py-3">
+                        <div className="rounded-[12px] border p-4 animate-fade-up" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+                          <div className="flex items-center gap-3">
+                            <span className="flex h-10 w-10 items-center justify-center rounded-full text-[11px] font-semibold" style={{ background: "linear-gradient(135deg,#7B5CF5,#E040FB)", color: "#fff" }}>{initials(m.name)}</span>
+                            <div>
+                              <p className="font-semibold">{m.name}</p>
+                              <p className="text-[11px]" style={{ color: "var(--hint)" }}>Менеджер · ID {m.externalId}</p>
+                            </div>
+                          </div>
+                          <div className="mt-3 grid grid-cols-2 gap-2 text-[12px] md:grid-cols-4">
+                            <div>Лидов: {m.totalLeads}</div>
+                            <div>Сделок: {m.wonDeals}</div>
+                            <div>Сумма: {formatCurrency(m.totalAmount)} ₸</div>
+                            <div>Конв: {m.conversion}%</div>
+                          </div>
+                          <div className="mt-3 text-[12px]">
+                            <p className="font-medium">Топ источников:</p>
+                            <p>{m.topSources.map((x) => `${x.name}: ${x.count}`).join(" · ") || "—"}</p>
+                          </div>
+                          <div className="mt-2 text-[12px]">
+                            <p className="font-medium">Топ причин провалов:</p>
+                            <p>{m.topFailReasons.map((x) => `${x.name}: ${x.count}`).join(" · ") || "—"}</p>
+                          </div>
+                          <div className="mt-2 text-[12px]">
+                            <p className="font-medium">По воронкам:</p>
+                            {m.byPipeline.map((p) => (
+                              <p key={`${m.id}-${p.pipelineId}`}>{p.pipelineName}: {p.deals} сделок · {formatCurrency(p.amount)} ₸</p>
+                            ))}
+                          </div>
+                        </div>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
-          </>
-        ) : null}
+                  ) : null}
+                </>
+              ))}
+            </tbody>
+          </table>
+        </Card>
 
-        <Link
-          href="/dashboard"
-          className="inline-block text-[13px] font-medium"
-          style={{ color: "var(--blue)" }}
-        >
-          ← К дашборду
-        </Link>
+        <Card>
+          <CardHeader title="Сравнение периодов" sub="текущий vs прошлый аналогичный период" />
+          <div className="overflow-x-auto p-3">
+            <table className="w-full min-w-[640px] text-[12px]">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-[0.1em]" style={{ color: "rgba(255,255,255,0.4)" }}>
+                  <th className="py-2 text-left">Менеджер</th>
+                  <th className="py-2 text-right">Текущий период</th>
+                  <th className="py-2 text-right">Прошлый период</th>
+                  <th className="py-2 text-right">Изменение</th>
+                </tr>
+              </thead>
+              <tbody>
+                {compare.map((r) => (
+                  <tr key={r.managerId} className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+                    <td className="py-2">{r.name}</td>
+                    <td className="py-2 text-right">{formatCurrency(r.current)} ₸</td>
+                    <td className="py-2 text-right">{formatCurrency(r.previous)} ₸</td>
+                    <td className="py-2 text-right" style={{ color: r.changePct >= 0 ? "var(--green)" : "var(--red)" }}>{r.changePct >= 0 ? "↑" : "↓"} {Math.abs(r.changePct)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       </div>
     </div>
   );

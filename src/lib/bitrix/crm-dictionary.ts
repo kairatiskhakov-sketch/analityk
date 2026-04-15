@@ -77,9 +77,11 @@ export async function mergeBitrixDictionaryMaps(
   for (const r of rows) {
     if (r.entityId === "SOURCE") {
       srcMap.set(r.externalId, r.name);
+      srcMap.set(r.externalId.toUpperCase(), r.name);
     }
     if (r.entityId === "LOST_REASON" || r.entityId === "LEAD_LOST_REASON") {
       lostMap.set(r.externalId, r.name);
+      lostMap.set(r.externalId.toUpperCase(), r.name);
     }
   }
   return { lostMap, srcMap };

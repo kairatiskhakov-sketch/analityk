@@ -5,12 +5,13 @@ export type DashboardFilters = {
   end: Date;
   managerIds: string[] | undefined;
   pipelineId: string | undefined;
+  stageIds: string[] | undefined;
 };
 
 export function parseManagerIdsFromSearchParams(
   searchParams: URLSearchParams,
 ): string[] | undefined {
-  const raw = searchParams.get("managerIds");
+  const raw = searchParams.get("managers");
   const ids = raw
     ? raw
         .split(",")
@@ -24,7 +25,7 @@ export function parseDashboardFilters(
   searchParams: URLSearchParams,
 ): DashboardFilters {
   const { start, end } = parseDashboardRangeFromSearchParams(searchParams);
-  const raw = searchParams.get("managerIds");
+  const raw = searchParams.get("managers");
   const managerIds = raw
     ? raw
         .split(",")
@@ -32,10 +33,18 @@ export function parseDashboardFilters(
         .filter(Boolean)
     : [];
   const pipelineId = searchParams.get("pipelineId")?.trim() || undefined;
+  const stageRaw = searchParams.get("stageIds");
+  const stageIds = stageRaw
+    ? stageRaw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
   return {
     start,
     end,
     managerIds: managerIds.length ? managerIds : undefined,
     pipelineId,
+    stageIds: stageIds.length ? stageIds : undefined,
   };
 }

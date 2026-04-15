@@ -1,4 +1,5 @@
 import {
+  BitrixAPI,
   dealAnalyticsType,
   dealIsLost,
   dealIsWon,
@@ -25,14 +26,29 @@ function ymd(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-export async function bitrixLeadExportRowsForDay(day: Date): Promise<LeadExportRow[]> {
+export type LeadExportMode = "created" | "closed_won";
+
+export async function bitrixLeadExportRowsForDay(
+  day: Date,
+  mode: LeadExportMode = "created",
+): Promise<LeadExportRow[]> {
   const conn = await getActiveBitrixConnection();
   if (!conn) return [];
   const url = getBitrixWebhookBaseUrl(conn);
   if (!url) return [];
   const df = ymd(day);
+  const api = new BitrixAPI(url);
+  const leadsPromise =
+    mode === "closed_won"
+      ? api.getLeads({
+          dateFrom: df,
+          dateTo: df,
+          dateField: "DATE_CLOSED",
+          statusSemanticId: "S",
+        })
+      : fetchLeadsCached(url, df, df);
   const [leads, managers, sources] = await Promise.all([
-    fetchLeadsCached(url, df, df),
+    leadsPromise,
     fetchManagersCached(url),
     fetchSourcesCatalogCached(url),
   ]);
@@ -81,13 +97,20 @@ export async function buildBitrixDailyReportData(): Promise<DailyBitrixReport> {
   }
   const df = ymd(start);
   const dt = ymd(end);
-  const [wonStageIds, stageConfigs, leads, deals] = await Promise.all([
+  const api = new BitrixAPI(url);
+  const [wonStageIds, stageConfigs, leads, wonLeadsByCloseDate, deals] = await Promise.all([
     getOrSyncWonStageIds(url),
     getStageConfigs(),
     fetchLeadsCached(url, df, dt),
+    api.getLeads({
+      dateFrom: df,
+      dateTo: dt,
+      dateField: "DATE_CLOSED",
+      statusSemanticId: "S",
+    }),
     fetchDealsCached(url, df, dt),
   ]);
-  const wonLeads = leads.filter(leadIsWon);
+  const wonLeads = wonLeadsByCloseDate.filter(leadIsWon);
   const lostLeads = leads.filter(leadIsLost);
   const inProgress = leads.filter((l) => !leadIsWon(l) && !leadIsLost(l));
   const leadSales = wonLeads.reduce((s, l) => s + parseOpportunity(l.OPPORTUNITY), 0);

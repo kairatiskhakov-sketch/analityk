@@ -25,6 +25,11 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const { start, end } = parseDashboardRangeFromSearchParams(searchParams);
     const managerIds = parseManagerIdsFromSearchParams(searchParams);
+    const pipelineId = searchParams.get("pipelineId") || undefined;
+    const stageIdsRaw = searchParams.get("stageIds");
+    const stageSet = stageIdsRaw
+      ? new Set(stageIdsRaw.split(",").map((s) => s.trim()).filter(Boolean))
+      : null;
 
     const conn = await getActiveBitrixConnection();
     const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
@@ -35,9 +40,12 @@ export async function GET(req: Request) {
     const [wonStageIds, stageConfigs, deals] = await Promise.all([
       getOrSyncWonStageIds(url),
       getStageConfigs(),
-      fetchDealsCached(url, ymd(start), ymd(end), managerIds),
+      fetchDealsCached(url, ymd(start), ymd(end), managerIds, pipelineId),
     ]);
-    const won = deals.filter((d) =>
+    const scopedDeals = stageSet
+      ? deals.filter((d) => stageSet.has(String(d.STAGE_ID ?? "")))
+      : deals;
+    const won = scopedDeals.filter((d) =>
       stageConfigs.length > 0
         ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
         : dealIsWon(d, wonStageIds),

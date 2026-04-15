@@ -95,12 +95,22 @@ export function aggregateWonDealsFacts(
   deals: BitrixDeal[],
   wonStageIds: string[],
   stageConfigs?: StageConfig[],
-): { totalFact: number; byManager: Record<string, number> } {
-  const wonDeals = deals.filter((d) =>
-    stageConfigs && stageConfigs.length > 0
+  stageIds?: string[],
+): {
+  totalFact: number;
+  byManager: Record<string, number>;
+  dealsByManager: Record<string, number>;
+} {
+  const useSelectedStages = Boolean(stageIds && stageIds.length > 0);
+  const selected = new Set((stageIds ?? []).map((s) => String(s)));
+  const wonDeals = deals.filter((d) => {
+    if (useSelectedStages) {
+      return selected.has(String(d.STAGE_ID ?? ""));
+    }
+    return stageConfigs && stageConfigs.length > 0
       ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
-      : dealIsWon(d, wonStageIds),
-  );
+      : dealIsWon(d, wonStageIds);
+  });
 
   console.log("Plan facts - total deals:", deals.length);
   console.log("Plan facts - won stage ids:", wonStageIds);
@@ -119,17 +129,19 @@ export function aggregateWonDealsFacts(
   );
 
   const byManager: Record<string, number> = {};
+  const dealsByManager: Record<string, number> = {};
   for (const deal of wonDeals) {
     const mgrId = String(deal.ASSIGNED_BY_ID ?? "");
     if (!mgrId) continue;
     byManager[mgrId] =
       (byManager[mgrId] || 0) +
       parseFloat(String(deal.OPPORTUNITY ?? "0"));
+    dealsByManager[mgrId] = (dealsByManager[mgrId] || 0) + 1;
   }
 
   console.log("byManager keys:", Object.keys(byManager));
 
-  return { totalFact, byManager };
+  return { totalFact, byManager, dealsByManager };
 }
 
 /**
@@ -139,18 +151,28 @@ export async function fetchPlanFactsUncached(
   webhookUrl: string,
   dateFrom: string,
   dateTo: string,
-): Promise<{ totalFact: number; byManager: Record<string, number> }> {
-  const [wonStageIds, stageConfigs, allDeals] = await Promise.all([
+  stageIds?: string[],
+  categoryId?: string,
+): Promise<{
+  totalFact: number;
+  byManager: Record<string, number>;
+  dealsByManager: Record<string, number>;
+}> {
+  const [wonStageIdsRaw, stageConfigs] = await Promise.all([
     getOrSyncWonStageIds(webhookUrl),
     getStageConfigs(),
-    fetchDealsMergedByChunks(
-      webhookUrl,
-      dateFrom,
-      dateTo,
-      PLAN_FACT_DEAL_SELECT,
-    ),
   ]);
-  return aggregateWonDealsFacts(allDeals, wonStageIds, stageConfigs);
+  const wonStageIds = Array.from(new Set(wonStageIdsRaw)).slice(0, 20);
+  const stageFilterIds = stageIds?.length ? stageIds : wonStageIds;
+  const allDeals = await fetchDealsMergedByChunks(
+    webhookUrl,
+    dateFrom,
+    dateTo,
+    PLAN_FACT_DEAL_SELECT,
+    categoryId,
+    stageFilterIds,
+  );
+  return aggregateWonDealsFacts(allDeals, wonStageIds, stageConfigs, stageIds);
 }
 
 /**
@@ -161,7 +183,11 @@ export async function getFactByManager(
   webhookUrl: string,
   dateFrom: string,
   dateTo: string,
-): Promise<{ totalFact: number; byManager: Record<string, number> }> {
+): Promise<{
+  totalFact: number;
+  byManager: Record<string, number>;
+  dealsByManager: Record<string, number>;
+}> {
   return fetchPlanFactsUncached(webhookUrl, dateFrom, dateTo);
 }
 

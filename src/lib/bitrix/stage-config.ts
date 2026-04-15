@@ -12,7 +12,11 @@ export function autoDetectStageType(stageName: string): StageAnalyticsType {
     name.includes("оплач") ||
     name.includes("выполнен") ||
     name.includes("сдан") ||
-    name.includes("полная оплата")
+    name.includes("полная оплата") ||
+    name.includes("успешн") ||
+    name.includes("реализ") ||
+    name.includes("won") ||
+    name.includes("paid")
   ) {
     return "won";
   }
@@ -20,7 +24,9 @@ export function autoDetectStageType(stageName: string): StageAnalyticsType {
     name.includes("закрыт") ||
     name.includes("отказ") ||
     name.includes("провал") ||
-    name.includes("не реализ")
+    name.includes("не реализ") ||
+    name.includes("junk") ||
+    name.includes("lose")
   ) {
     return "lost";
   }

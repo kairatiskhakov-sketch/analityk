@@ -205,6 +205,8 @@ export async function computeManagerDynamics(
   dateTo: string,
   groupBy: GroupBy,
   managerIds?: string[],
+  pipelineId?: string,
+  stageIds?: string[],
 ): Promise<ManagerDynamicsResult> {
   const filter =
     managerIds?.length ? new Set(managerIds.map(String)) : null;
@@ -215,7 +217,7 @@ export async function computeManagerDynamics(
       getOrSyncWonStageIds(webhookUrl),
       getStageConfigs(),
       fetchLeadsUncached(webhookUrl, dateFrom, dateTo, mids),
-      fetchDealsUncached(webhookUrl, dateFrom, dateTo, mids),
+      fetchDealsUncached(webhookUrl, dateFrom, dateTo, mids, pipelineId),
       Promise.resolve(prevPeriodYmd(dateFrom, dateTo)),
       prisma.manager.findMany({
         where: { crmType: "bitrix24" },
@@ -234,8 +236,15 @@ export async function computeManagerDynamics(
   const { prevFrom, prevTo } = prevRange;
   const [prevLeads, prevDeals] = await Promise.all([
     fetchLeadsUncached(webhookUrl, prevFrom, prevTo, mids),
-    fetchDealsUncached(webhookUrl, prevFrom, prevTo, mids),
+    fetchDealsUncached(webhookUrl, prevFrom, prevTo, mids, pipelineId),
   ]);
+  const stageFilter = stageIds?.length ? new Set(stageIds.map(String)) : null;
+  const dealsScoped = stageFilter
+    ? deals.filter((d) => stageFilter.has(String(d.STAGE_ID ?? "")))
+    : deals;
+  const prevDealsScoped = stageFilter
+    ? prevDeals.filter((d) => stageFilter.has(String(d.STAGE_ID ?? "")))
+    : prevDeals;
 
   const extToName = new Map(prismaManagers.map((m) => [m.externalId, m.name]));
   const extToPrismaId = new Map(
@@ -247,14 +256,14 @@ export async function computeManagerDynamics(
 
   const currentRoot = aggregate(
     leads,
-    deals,
+    dealsScoped,
     wonStageIds,
     groupBy,
     filter,
     stageConfigs,
   );
   const prevTotals = totalsFromRoot(
-    aggregate(prevLeads, prevDeals, wonStageIds, "day", filter, stageConfigs),
+    aggregate(prevLeads, prevDealsScoped, wonStageIds, "day", filter, stageConfigs),
   );
   const totals = totalsFromRoot(currentRoot);
 

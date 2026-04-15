@@ -10,6 +10,7 @@ export async function POST(req: Request) {
     const body = (await req.json()) as {
       connectionId?: string;
       date?: string;
+      mode?: "created" | "closed_won";
     };
     if (!body.connectionId?.trim()) {
       return jsonError("Нужен connectionId");
@@ -21,7 +22,8 @@ export async function POST(req: Request) {
     }
 
     const day = body.date ? new Date(body.date) : new Date();
-    const rows = await bitrixLeadExportRowsForDay(day);
+    const mode = body.mode === "closed_won" ? "closed_won" : "created";
+    const rows = await bitrixLeadExportRowsForDay(day, mode);
 
     await exportDailyReport(
       accessToken,
@@ -30,7 +32,11 @@ export async function POST(req: Request) {
       rows,
     );
 
-    return jsonOk({ exported: rows.length, spreadsheetId: connection.sheetsSpreadsheetId });
+    return jsonOk({
+      exported: rows.length,
+      mode,
+      spreadsheetId: connection.sheetsSpreadsheetId,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка Sheets";
     return jsonError(msg, 500);

@@ -6,14 +6,19 @@ export type BitrixLead = {
   ID?: string;
   TITLE?: string;
   STATUS_ID?: string;
+  STATUS_SEMANTIC_ID?: "S" | "F" | "P" | string;
   SOURCE_ID?: string;
   ASSIGNED_BY_ID?: string;
   OPPORTUNITY?: string;
   DATE_CREATE?: string;
+  DATE_CLOSED?: string;
   CREATED_TIME?: string;
   CLOSED_TIME?: string;
   LOST_REASON_ID?: string;
   UTM_SOURCE?: string;
+  UTM_MEDIUM?: string;
+  UTM_CAMPAIGN?: string;
+  ADDRESS_CITY?: string;
 };
 
 /** Поля сделки из crm.deal.list */
@@ -43,6 +48,7 @@ export type BitrixPipelineStage = {
   name: string;
   sort: number;
   semantics?: string;
+  color?: string;
 };
 
 export type BitrixPipeline = {
@@ -61,12 +67,18 @@ const DEFAULT_LEAD_SELECT = [
   "SOURCE_ID",
   "ASSIGNED_BY_ID",
   "STATUS_ID",
+  "STATUS_SEMANTIC_ID",
   "OPPORTUNITY",
   "DATE_CREATE",
+  "DATE_CLOSED",
   "CREATED_TIME",
   "CLOSED_TIME",
   "LOST_REASON_ID",
   "UTM_SOURCE",
+  "UTM_MEDIUM",
+  "UTM_CAMPAIGN",
+  "ADDRESS_CITY",
+  "CATEGORY_ID",
 ] as const;
 
 const DEFAULT_DEAL_SELECT = [
@@ -158,12 +170,18 @@ export class BitrixAPI {
     managerId?: string;
     managerIds?: string[];
     select?: string[];
+    dateField?: "DATE_CREATE" | "DATE_CLOSED";
+    statusSemanticId?: "S" | "F" | "P";
   }): Promise<BitrixLead[]> {
     const select = params.select ?? [...DEFAULT_LEAD_SELECT];
+    const dateField = params.dateField ?? "DATE_CREATE";
     const filter: Record<string, unknown> = {
-      ">=DATE_CREATE": `${params.dateFrom}T00:00:00`,
-      "<=DATE_CREATE": `${params.dateTo}T23:59:59`,
+      [`>=${dateField}`]: `${params.dateFrom}T00:00:00`,
+      [`<=${dateField}`]: `${params.dateTo}T23:59:59`,
     };
+    if (params.statusSemanticId) {
+      filter.STATUS_SEMANTIC_ID = params.statusSemanticId;
+    }
     if (params.managerIds?.length) {
       filter.ASSIGNED_BY_ID = params.managerIds;
     } else if (params.managerId) {
@@ -182,6 +200,8 @@ export class BitrixAPI {
       NAME?: string;
       SORT?: string | number;
       SEMANTICS?: string;
+      COLOR?: string;
+      EXTRA?: { SEMANTICS?: string; COLOR?: string };
     }[],
   ): BitrixPipelineStage[] {
     return rows
@@ -189,7 +209,8 @@ export class BitrixAPI {
         statusId: row.STATUS_ID ? String(row.STATUS_ID) : "",
         name: (row.NAME ?? "").trim() || String(row.STATUS_ID),
         sort: Number(row.SORT ?? 0),
-        semantics: row.SEMANTICS,
+        semantics: row.EXTRA?.SEMANTICS ?? row.SEMANTICS,
+        color: row.COLOR ?? row.EXTRA?.COLOR,
       }))
       .filter((s) => s.statusId);
   }
@@ -200,6 +221,7 @@ export class BitrixAPI {
     managerId?: string;
     managerIds?: string[];
     categoryId?: string;
+    stageIds?: string[];
     select?: string[];
   }): Promise<BitrixDeal[]> {
     const select = params.select ?? [...DEFAULT_DEAL_SELECT];
@@ -211,6 +233,9 @@ export class BitrixAPI {
       const cid = String(params.categoryId);
       // Основная воронка Bitrix24 — CATEGORY_ID = 0 (число)
       filter.CATEGORY_ID = cid === "0" ? 0 : cid;
+    }
+    if (params.stageIds?.length) {
+      filter.STAGE_ID = params.stageIds;
     }
     if (params.managerIds?.length) {
       filter.ASSIGNED_BY_ID = params.managerIds;
@@ -225,16 +250,9 @@ export class BitrixAPI {
   }
 
   /**
-   * Стадии сделок по ключевым словам (оплачен, выполнен, …) — для кеша WON_STAGE.
+   * Выигранные стадии сделок по официальному SEMANTICS (success).
    */
   async getWonStageEntries(): Promise<{ id: string; name: string }[]> {
-    const wonKeywords = [
-      "оплачен",
-      "выполнен",
-      "сдан",
-      "полная оплата",
-      "оплата получена",
-    ];
     const seen = new Set<string>();
     const out: { id: string; name: string }[] = [];
 
@@ -255,28 +273,28 @@ export class BitrixAPI {
     };
 
     let mainRes = await this.call<
-      { STATUS_ID?: string; NAME?: string }[]
+      { STATUS_ID?: string; NAME?: string; SEMANTICS?: string; EXTRA?: { SEMANTICS?: string } }[]
     >("crm.status.list", {
       filter: { ENTITY_ID: "DEAL_STAGE", CATEGORY_ID: "0" },
     });
     let mainRows = mainRes.result ?? [];
     if (mainRows.length === 0) {
-      mainRes = await this.call<{ STATUS_ID?: string; NAME?: string }[]>(
+      mainRes = await this.call<{ STATUS_ID?: string; NAME?: string; SEMANTICS?: string; EXTRA?: { SEMANTICS?: string } }[]>(
         "crm.status.list",
         { filter: { ENTITY_ID: "DEAL_STAGE", CATEGORY_ID: 0 } },
       );
       mainRows = mainRes.result ?? [];
     }
     if (mainRows.length === 0) {
-      mainRes = await this.call<{ STATUS_ID?: string; NAME?: string }[]>(
+      mainRes = await this.call<{ STATUS_ID?: string; NAME?: string; SEMANTICS?: string; EXTRA?: { SEMANTICS?: string } }[]>(
         "crm.status.list",
         { filter: { ENTITY_ID: "DEAL_STAGE" } },
       );
       mainRows = mainRes.result ?? [];
     }
     for (const stage of mainRows) {
-      const name = (stage.NAME ?? "").toLowerCase();
-      if (wonKeywords.some((kw) => name.includes(kw))) {
+      const semantics = (stage.EXTRA?.SEMANTICS ?? stage.SEMANTICS ?? "").toLowerCase();
+      if (semantics === "success" || semantics === "s") {
         pushIf(stage.STATUS_ID, stage.NAME ?? "");
       }
     }
@@ -288,13 +306,13 @@ export class BitrixAPI {
     for (const pipeline of rawCats) {
       const pid = pipeline.ID != null ? String(pipeline.ID) : "";
       if (!pid || pid === "0") continue;
-      let stRes = await this.call<{ STATUS_ID?: string; NAME?: string }[]>(
+      let stRes = await this.call<{ STATUS_ID?: string; NAME?: string; SEMANTICS?: string; EXTRA?: { SEMANTICS?: string } }[]>(
         "crm.status.list",
         { filter: { ENTITY_ID: `DEAL_STAGE_${pid}` } },
       );
       let rows = stRes.result ?? [];
       if (rows.length === 0) {
-        stRes = await this.call<{ STATUS_ID?: string; NAME?: string }[]>(
+        stRes = await this.call<{ STATUS_ID?: string; NAME?: string; SEMANTICS?: string; EXTRA?: { SEMANTICS?: string } }[]>(
           "crm.status.list",
           { filter: { ENTITY_ID: "DEAL_STAGE", CATEGORY_ID: pid } },
         );
@@ -303,8 +321,8 @@ export class BitrixAPI {
       const plName =
         (pipeline.NAME && String(pipeline.NAME).trim()) || pid;
       for (const stage of rows) {
-        const name = (stage.NAME ?? "").toLowerCase();
-        if (wonKeywords.some((kw) => name.includes(kw))) {
+        const semantics = (stage.EXTRA?.SEMANTICS ?? stage.SEMANTICS ?? "").toLowerCase();
+        if (semantics === "success" || semantics === "s") {
           pushIf(stage.STATUS_ID, stage.NAME ?? "", plName);
         }
       }
@@ -398,6 +416,8 @@ export class BitrixAPI {
         NAME?: string;
         SORT?: string | number;
         SEMANTICS?: string;
+        COLOR?: string;
+        EXTRA?: { SEMANTICS?: string; COLOR?: string };
       }[]
     >("crm.status.list", {
       filter: { ENTITY_ID: "DEAL_STAGE", CATEGORY_ID: "0" },
@@ -410,6 +430,8 @@ export class BitrixAPI {
           NAME?: string;
           SORT?: string | number;
           SEMANTICS?: string;
+          COLOR?: string;
+          EXTRA?: { SEMANTICS?: string; COLOR?: string };
         }[]
       >("crm.status.list", {
         filter: { ENTITY_ID: "DEAL_STAGE", CATEGORY_ID: 0 },
@@ -441,17 +463,35 @@ export class BitrixAPI {
     for (const cat of others) {
       const id = cat.ID != null ? String(cat.ID) : "";
       if (!id) continue;
-      const stRes = await this.call<
+      let stRes = await this.call<
         {
           STATUS_ID?: string;
           NAME?: string;
           SORT?: string | number;
           SEMANTICS?: string;
+          COLOR?: string;
+          EXTRA?: { SEMANTICS?: string; COLOR?: string };
         }[]
       >("crm.status.list", {
-        filter: { ENTITY_ID: "DEAL_STAGE", CATEGORY_ID: id },
+        filter: { ENTITY_ID: `DEAL_STAGE_${id}` },
       });
-      const stages = this.mapDealStageRows(stRes.result ?? []).sort(
+      let rows = stRes.result ?? [];
+      if (rows.length === 0) {
+        stRes = await this.call<
+          {
+            STATUS_ID?: string;
+            NAME?: string;
+            SORT?: string | number;
+            SEMANTICS?: string;
+            COLOR?: string;
+            EXTRA?: { SEMANTICS?: string; COLOR?: string };
+          }[]
+        >("crm.status.list", {
+          filter: { ENTITY_ID: "DEAL_STAGE", CATEGORY_ID: id },
+        });
+        rows = stRes.result ?? [];
+      }
+      const stages = this.mapDealStageRows(rows).sort(
         (a, b) => a.sort - b.sort,
       );
       out.push({
@@ -484,17 +524,21 @@ export {
 } from "./deal-predicates";
 
 export function leadIsWon(l: BitrixLead): boolean {
-  return (l.STATUS_ID ?? "").toUpperCase() === "CONVERTED";
+  return String(l.STATUS_SEMANTIC_ID ?? "").toUpperCase() === "S";
 }
 
 export function leadIsLost(l: BitrixLead): boolean {
-  const s = (l.STATUS_ID ?? "").toUpperCase();
-  return (
-    s === "JUNK" ||
-    s === "LOSE" ||
-    s.includes("FAIL") ||
-    s.includes("JUNK")
-  );
+  const semantic = String(l.STATUS_SEMANTIC_ID ?? "").toUpperCase();
+  const status = String(l.STATUS_ID ?? "").toUpperCase();
+  if (semantic === "F") return true;
+  if (status === "JUNK") return true;
+  if (status.includes("JUNK")) return true;
+  return false;
+}
+
+export function leadInProgress(l: BitrixLead): boolean {
+  const semantic = String(l.STATUS_SEMANTIC_ID ?? "").toUpperCase();
+  return semantic === "P" || !semantic;
 }
 
 export {

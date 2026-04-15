@@ -1,4 +1,5 @@
 import {
+  BitrixAPI,
   dealAnalyticsType,
   dealIsLost,
   dealIsProgress,
@@ -85,14 +86,23 @@ export async function getDashboardOverview(
   const dateFrom = ymd(filters.start);
   const dateTo = ymd(filters.end);
   const mids = filters.managerIds;
+  const stageFilter = filters.stageIds ? new Set(filters.stageIds) : null;
 
   await ensureBitrixLeadDictionaries(webhookUrl);
 
-  const [wonStageIds, stageConfigs, leads, deals, pipelines, lostCat, srcCat] =
+  const api = new BitrixAPI(webhookUrl);
+  const [wonStageIds, stageConfigs, leads, wonLeadsByCloseDate, deals, pipelines, lostCat, srcCat] =
     await Promise.all([
       getOrSyncWonStageIds(webhookUrl),
       getStageConfigs(),
       fetchLeadsCached(webhookUrl, dateFrom, dateTo, mids),
+      api.getLeads({
+        dateFrom,
+        dateTo,
+        managerIds: mids,
+        dateField: "DATE_CLOSED",
+        statusSemanticId: "S",
+      }),
       fetchDealsCached(
         webhookUrl,
         dateFrom,
@@ -106,17 +116,35 @@ export async function getDashboardOverview(
     ]);
 
   const { lostMap, srcMap } = await mergeBitrixDictionaryMaps(
-    new Map(lostCat.map((x) => [x.id, x.name])),
-    new Map(srcCat.map((x) => [x.id, x.name])),
+    new Map(lostCat.map((x) => [String(x.id).toUpperCase(), x.name])),
+    new Map(srcCat.map((x) => [String(x.id).toUpperCase(), x.name])),
   );
 
-  const wonLeads = leads.filter(leadIsWon);
-  const lostLeads = leads.filter(leadIsLost);
+  const scopedLeads = filters.pipelineId
+    ? leads.filter(
+        (l) =>
+          String((l as { CATEGORY_ID?: string }).CATEGORY_ID ?? "") ===
+          filters.pipelineId,
+      )
+    : leads;
+  const scopedWonLeadsByCloseDate = filters.pipelineId
+    ? wonLeadsByCloseDate.filter(
+        (l) =>
+          String((l as { CATEGORY_ID?: string }).CATEGORY_ID ?? "") ===
+          filters.pipelineId,
+      )
+    : wonLeadsByCloseDate;
+
+  const scopedDeals = stageFilter
+    ? deals.filter((d) => stageFilter.has(String(d.STAGE_ID ?? "")))
+    : deals;
+  const wonLeads = scopedWonLeadsByCloseDate.filter(leadIsWon);
+  const lostLeads = scopedLeads.filter(leadIsLost);
   const leadSalesFromWon = wonLeads.reduce(
     (s, l) => s + parseOpportunity(l.OPPORTUNITY),
     0,
   );
-  const dealWonSum = deals
+  const dealWonSum = scopedDeals
     .filter((d) =>
       stageConfigs.length > 0
         ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
@@ -125,7 +153,7 @@ export async function getDashboardOverview(
     .reduce((s, d) => s + parseOpportunity(d.OPPORTUNITY), 0);
 
   const failRaw = new Map<string, number>();
-  for (const l of leads) {
+  for (const l of scopedLeads) {
     if (!leadIsLost(l)) continue;
     const raw = (l.LOST_REASON_ID ?? "").toString().trim();
     const rid = raw || "unknown";
@@ -142,7 +170,7 @@ export async function getDashboardOverview(
   );
 
   const srcRaw = new Map<string, number>();
-  for (const l of leads) {
+  for (const l of scopedLeads) {
     const label = resolveBitrixSourceLabel(l.SOURCE_ID, srcMap);
     srcRaw.set(label, (srcRaw.get(label) ?? 0) + 1);
   }
@@ -159,33 +187,33 @@ export async function getDashboardOverview(
 
   return {
     general: {
-      totalDeals: deals.length,
+      totalDeals: scopedDeals.length,
       activePipelines,
-      leadsInPeriod: leads.length,
+      leadsInPeriod: scopedLeads.length,
     },
     leads: {
-      total: leads.length,
+      total: scopedLeads.length,
       won: wonLeads.length,
       lost: lostLeads.length,
       salesAmount: leadSalesFromWon + dealWonSum,
     },
     deals: {
       progress: sliceDeals(
-        deals,
+        scopedDeals,
         (d) =>
           stageConfigs.length > 0
             ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "progress"
             : dealIsProgress(d, wonStageIds),
       ),
       won: sliceDeals(
-        deals,
+        scopedDeals,
         (d) =>
           stageConfigs.length > 0
             ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
             : dealIsWon(d, wonStageIds),
       ),
       lost: sliceDeals(
-        deals,
+        scopedDeals,
         (d) =>
           stageConfigs.length > 0
             ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "lost"
@@ -217,6 +245,7 @@ export async function getDashboardFunnels(
   const dateFrom = ymd(filters.start);
   const dateTo = ymd(filters.end);
   const mids = filters.managerIds;
+  const stageFilter = filters.stageIds ? new Set(filters.stageIds) : null;
 
   const pipelines = await fetchPipelinesCached(webhookUrl);
   const pipelinesToShow = filters.pipelineId
@@ -226,13 +255,16 @@ export async function getDashboardFunnels(
   const out: FunnelApi[] = [];
 
   for (const p of pipelinesToShow) {
-    const deals = await fetchDealsCached(
+    const dealsRaw = await fetchDealsCached(
       webhookUrl,
       dateFrom,
       dateTo,
       mids,
       p.id,
     );
+    const deals = stageFilter
+      ? dealsRaw.filter((d) => stageFilter.has(String(d.STAGE_ID ?? "")))
+      : dealsRaw;
 
     const byStage = new Map<string, { count: number; amount: number }>();
     for (const d of deals) {

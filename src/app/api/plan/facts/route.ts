@@ -9,6 +9,7 @@ import {
 } from "@/lib/plan/bitrix-facts";
 import {
   getPeriodRange,
+  parsePeriodToRange,
   periodKeyFromDate,
   type PlanPeriodType,
 } from "@/lib/plan/period";
@@ -19,11 +20,20 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const maxDuration = 30;
 
-const FACTS_TIMEOUT_MS = 25_000;
+const FACTS_TIMEOUT_MS = 28_000;
 
 function parsePeriodType(v: string | null): PlanPeriodType | null {
   if (v === "month" || v === "quarter" || v === "year") return v;
   return null;
+}
+
+function getPreviousPeriod(period: string, periodType: PlanPeriodType) {
+  const { start } = parsePeriodToRange(period, periodType);
+  const prev = new Date(start);
+  if (periodType === "month") prev.setMonth(prev.getMonth() - 1);
+  else if (periodType === "quarter") prev.setMonth(prev.getMonth() - 3);
+  else prev.setFullYear(prev.getFullYear() - 1);
+  return periodKeyFromDate(prev, periodType);
 }
 
 export async function GET(req: Request) {
@@ -34,6 +44,9 @@ export async function GET(req: Request) {
       periodKeyFromDate(new Date(), "month");
     const periodType =
       parsePeriodType(searchParams.get("periodType")) ?? "month";
+    const pipelineId = searchParams.get("pipelineId")?.trim() || undefined;
+    const stageIds =
+      searchParams.get("stageIds")?.split(",").map((v) => v.trim()).filter(Boolean) || [];
 
     let dateFrom: string;
     let dateTo: string;
@@ -65,6 +78,8 @@ export async function GET(req: Request) {
 
     let totalFact = 0;
     let byManager: Record<string, number> = {};
+    let dealsByManager: Record<string, number> = {};
+    let prevByManager: Record<string, number> = {};
     let warning: string | undefined;
 
     let bitrixUsers: { id: string; name: string }[] = [];
@@ -72,13 +87,25 @@ export async function GET(req: Request) {
     if (url) {
       try {
         const fact = await Promise.race([
-          fetchPlanFactsUncached(url, dateFrom, dateTo),
+          fetchPlanFactsUncached(url, dateFrom, dateTo, stageIds, pipelineId),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("timeout")), FACTS_TIMEOUT_MS),
           ),
         ]);
         totalFact = fact.totalFact;
         byManager = { ...fact.byManager };
+        dealsByManager = { ...fact.dealsByManager };
+
+        const prevPeriod = getPreviousPeriod(period, periodType);
+        const prevRange = getPeriodRange(prevPeriod, periodType);
+        const prevFact = await fetchPlanFactsUncached(
+          url,
+          prevRange.dateFrom,
+          prevRange.dateTo,
+          stageIds,
+          pipelineId,
+        );
+        prevByManager = { ...prevFact.byManager };
 
         console.log("=== PLAN FACTS DEBUG ===");
         console.log("totalFact:", totalFact);
@@ -123,6 +150,9 @@ export async function GET(req: Request) {
         : { fact: 0 as number, source: "none" as const };
       const fact = resolved.fact;
       const pct = plan > 0 ? Math.round((fact / plan) * 100) : 0;
+      const deals = dealsByManager[resolved.matchedBitrixId ?? bitrixId] ?? dealsByManager[bitrixId] ?? 0;
+      const prevFact = prevByManager[resolved.matchedBitrixId ?? bitrixId] ?? prevByManager[bitrixId] ?? 0;
+      const trendPct = prevFact > 0 ? Math.round(((fact - prevFact) / prevFact) * 100) : null;
 
       if (url) {
         if (resolved.source === "name" && resolved.matchedBitrixId != null) {
@@ -146,6 +176,8 @@ export async function GET(req: Request) {
         plan,
         fact,
         pct,
+        deals,
+        trendPct,
       };
     });
 

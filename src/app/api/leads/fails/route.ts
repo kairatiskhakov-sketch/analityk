@@ -1,58 +1,100 @@
-import { leadIsLost } from "@/lib/bitrix/api";
-import { fetchLeadsCached } from "@/lib/bitrix/cache";
-import {
-  getActiveBitrixConnection,
-  getBitrixWebhookBaseUrl,
-} from "@/lib/bitrix/connection";
-import { parseManagerIdsFromSearchParams } from "@/lib/dashboard/dashboard-query";
-import { parseDashboardRangeFromSearchParams } from "@/lib/dashboard/range";
-import { jsonError, jsonOk } from "@/lib/http/json";
-import { topFailReasons } from "@/lib/dashboard/stats";
+import { auth } from "@/auth";
+import { BitrixAPI } from "@/lib/bitrix/api";
+import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
+import { getActiveBitrixConnection, getBitrixWebhookBaseUrl } from "@/lib/bitrix/connection";
+import { prisma } from "@/lib/prisma";
+import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-function ymd(d: Date): string {
-  return d.toISOString().slice(0, 10);
+function formatYmd(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 export async function GET(req: Request) {
+  const session = await auth();
+  console.log("fails session:", JSON.stringify(session));
+
   try {
     const { searchParams } = new URL(req.url);
-    const connectionId = searchParams.get("connectionId");
-    const { start, end } = parseDashboardRangeFromSearchParams(searchParams);
-    const managerIds = parseManagerIdsFromSearchParams(searchParams);
+    const dateFrom = searchParams.get("dateFrom");
+    const dateTo = searchParams.get("dateTo");
+    const pipelineId = searchParams.get("pipelineId") || "";
+    const managerIds = searchParams.get("managers")?.split(",").filter(Boolean) || [];
 
-    const conn = await getActiveBitrixConnection();
-    const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
-    if (!url) {
-      return jsonOk({ fails: [] });
+    const connection = await getActiveBitrixConnection();
+    const webhookUrl = connection ? getBitrixWebhookBaseUrl(connection) : null;
+    if (!webhookUrl) {
+      return NextResponse.json({ fails: [] });
     }
 
-    const df = ymd(start);
-    const dt = ymd(end);
-    const leads = await fetchLeadsCached(url, df, dt, managerIds);
-    console.log(
-      "Lead statuses in period:",
-      Array.from(new Set(leads.map((l) => l.STATUS_ID))),
-    );
-    console.log("Total leads:", leads.length);
-    console.log(
-      "Lost leads:",
-      leads.filter((l) => leadIsLost(l)).length,
-    );
-    console.log(
-      "Sample lead STATUS_IDs:",
-      Array.from(new Set(leads.map((l) => l.STATUS_ID))).slice(0, 10),
-    );
-    console.log(
-      "Sample LOST_REASON_IDs:",
-      leads.map((l) => l.LOST_REASON_ID).filter(Boolean).slice(0, 10),
-    );
+    const api = new BitrixAPI(webhookUrl);
+    const wonStageIds = await getOrSyncWonStageIds(webhookUrl);
+    console.log("Won stage IDs:", wonStageIds);
+    const toDate = dateTo || formatYmd(new Date());
+    const fromDate = dateFrom || formatYmd(new Date(Date.now() - 6 * 86400000));
+    const lostStageConfigs = await prisma.stageConfig.findMany({
+      where: { crmType: "bitrix24", type: "lost" },
+    });
+    const lostStageIds = lostStageConfigs.map((s) => s.externalId);
+    console.log("Lost stage IDs from config:", lostStageIds);
 
-    const fails = await topFailReasons(start, end, connectionId, managerIds);
-    return jsonOk({ fails });
+    if (lostStageIds.length === 0) {
+      return NextResponse.json({
+        fails: [],
+        warning: "Настройте этапы провала в разделе Настройки → Воронки и этапы",
+      });
+    }
+
+    const deals = await api.getDeals({
+      dateFrom: fromDate,
+      dateTo: toDate,
+      managerIds: managerIds.length ? managerIds : undefined,
+      categoryId: pipelineId || undefined,
+      select: [
+        "ID",
+        "STAGE_ID",
+        "OPPORTUNITY",
+        "ASSIGNED_BY_ID",
+        "CATEGORY_ID",
+        "DATE_CREATE",
+        "CLOSEDATE",
+        "COMMENTS",
+      ],
+    });
+
+    console.log("Total deals:", deals.length);
+    console.log("All deal STAGE_IDs:", Array.from(new Set(deals.map((d) => d.STAGE_ID))));
+
+    const lostDeals = deals.filter((d) => lostStageIds.includes(String(d.STAGE_ID ?? "")));
+    console.log("Lost deals:", lostDeals.length);
+
+    const stageNames: Record<string, string> = {};
+    for (const config of lostStageConfigs) {
+      stageNames[config.externalId] = config.name;
+    }
+
+    const grouped: Record<string, number> = {};
+    for (const deal of lostDeals) {
+      const stageId = String(deal.STAGE_ID ?? "");
+      const stageName = stageNames[stageId] || stageId || "Неизвестный этап";
+      grouped[stageName] = (grouped[stageName] || 0) + 1;
+    }
+
+    const fails = Object.entries(grouped)
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count);
+
+    console.log("Fails result:", fails);
+    return NextResponse.json({
+      fails,
+      source: "deals",
+      totalLostDeals: lostDeals.length,
+    });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Error";
-    return jsonError(msg, 500);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 }

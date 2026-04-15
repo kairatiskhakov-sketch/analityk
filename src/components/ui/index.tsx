@@ -11,9 +11,8 @@ export function Card({
 }) {
   return (
     <div
-      className={cn("rounded-[12px] border px-5 py-[18px]", className)}
+      className={cn("glass rounded-[18px] border px-5 py-[18px]", className)}
       style={{
-        background: "var(--surface)",
         borderColor: "var(--border)",
         ...style,
       }}
@@ -53,7 +52,7 @@ export function CardHeader({
 }
 
 const CHIP_STYLES = {
-  up: { background: "var(--accent-dim)", color: "var(--accent)" },
+  up: { background: "var(--green-bg)", color: "var(--green)", border: "1px solid rgba(0,230,118,0.3)" },
   down: { background: "var(--red-bg)", color: "var(--red)" },
   neutral: { background: "var(--surface2)", color: "var(--muted)" },
   blue: { background: "var(--blue-bg)", color: "var(--blue)" },
@@ -106,16 +105,18 @@ export function KpiCard({
   return (
     <div
       className={cn(
-        "animate-fade-up relative rounded-[12px] border p-4",
+        "animate-fade-up glass relative rounded-[18px] border p-4",
         className,
       )}
       style={{
-        background: "var(--surface)",
         borderColor: "var(--border)",
         ...style,
       }}
     >
-      <div className="absolute right-3 top-3 text-[var(--accent)] opacity-90">
+      <div
+        className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full opacity-95"
+        style={{ background: "var(--purple-bg)", color: "var(--purple)" }}
+      >
         {icon ?? <DefaultKpiIcon />}
       </div>
       <p
@@ -179,7 +180,7 @@ export function PageTopBar({
   right?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-shrink-0 items-center justify-between border-b px-6 py-5" style={{ borderColor: "var(--border)" }}>
+    <div className="flex flex-shrink-0 items-center justify-between border-b px-6 py-4" style={{ borderColor: "var(--border)" }}>
       <div>
         <h1
           className="text-[20px] font-semibold tracking-tight md:text-[22px]"
@@ -193,7 +194,18 @@ export function PageTopBar({
           </p>
         ) : null}
       </div>
-      <div className="flex items-center gap-2">{right}</div>
+      <div className="flex items-center gap-2">
+        {right ?? (
+          <>
+            <button type="button" className="flex h-8 w-8 items-center justify-center rounded-full border" style={{ borderColor: "var(--border2)", background: "var(--surface2)", color: "var(--muted)" }}>
+              <span className="text-[12px]">🔔</span>
+            </button>
+            <div className="flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-semibold" style={{ background: "linear-gradient(135deg, #7B5CF5, #E040FB)", color: "#fff" }}>
+              S
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -227,7 +239,7 @@ const STATUS_MAP: Record<
   LeadStatusUi,
   { label: string; bg: string; color: string }
 > = {
-  won: { label: "Продано", bg: "var(--green-bg)", color: "var(--accent)" },
+  won: { label: "Продано", bg: "var(--green-bg)", color: "var(--green)" },
   lost: { label: "Провалено", bg: "var(--red-bg)", color: "var(--red)" },
   new: { label: "Новый", bg: "var(--blue-bg)", color: "var(--blue)" },
   progress: { label: "В работе", bg: "var(--amber-bg)", color: "var(--amber)" },

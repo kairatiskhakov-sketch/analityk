@@ -1,4 +1,5 @@
 import {
+  BitrixAPI,
   autoDetectStageType,
   dealAnalyticsType,
   dealIsWon,
@@ -40,6 +41,8 @@ export async function getLeadMetrics(
   end: Date,
   _connectionId?: string | null,
   managerIds?: string[],
+  pipelineId?: string,
+  stageIds?: string[],
 ) {
   const url = await getWebhook();
   if (!url) {
@@ -54,14 +57,26 @@ export async function getLeadMetrics(
 
   const df = ymd(start);
   const dt = ymd(end);
-  const [wonStageIds, stageConfigs, leads, deals] = await Promise.all([
+  const api = new BitrixAPI(url);
+  const [wonStageIds, stageConfigs, leads, wonLeadsByCloseDate, dealsRaw] = await Promise.all([
     getOrSyncWonStageIds(url),
     getStageConfigs(),
     fetchLeadsCached(url, df, dt, managerIds),
-    fetchDealsCached(url, df, dt, managerIds),
+    api.getLeads({
+      dateFrom: df,
+      dateTo: dt,
+      managerIds,
+      dateField: "DATE_CLOSED",
+      statusSemanticId: "S",
+    }),
+    fetchDealsCached(url, df, dt, managerIds, pipelineId),
   ]);
+  const stageSet = stageIds?.length ? new Set(stageIds) : null;
+  const deals = stageSet
+    ? dealsRaw.filter((d) => stageSet.has(String(d.STAGE_ID ?? "")))
+    : dealsRaw;
 
-  const won = leads.filter(leadIsWon);
+  const won = wonLeadsByCloseDate.filter(leadIsWon);
   const lost = leads.filter(leadIsLost);
   const inProgress = leads.filter((l) => !leadIsWon(l) && !leadIsLost(l));
   const leadSales = won.reduce((s, l) => s + parseOpportunity(l.OPPORTUNITY), 0);
@@ -171,6 +186,8 @@ export async function getPipelineFunnel(
   end: Date,
   _connectionId?: string | null,
   managerIds?: string[],
+  pipelineId?: string,
+  stageIds?: string[],
 ): Promise<{ stages: FunnelStageRow[]; summary: FunnelSummary }> {
   const url = await getWebhook();
   if (!url) {
@@ -182,12 +199,16 @@ export async function getPipelineFunnel(
 
   const df = ymd(start);
   const dt = ymd(end);
-  const [wonStageIds, stageConfigs, pipelines, deals] = await Promise.all([
+  const [wonStageIds, stageConfigs, pipelines, dealsRaw] = await Promise.all([
     getOrSyncWonStageIds(url),
     getStageConfigs(),
     fetchPipelinesCached(url),
-    fetchDealsCached(url, df, dt, managerIds),
+    fetchDealsCached(url, df, dt, managerIds, pipelineId),
   ]);
+  const stageSet = stageIds?.length ? new Set(stageIds) : null;
+  const deals = stageSet
+    ? dealsRaw.filter((d) => stageSet.has(String(d.STAGE_ID ?? "")))
+    : dealsRaw;
 
   if (!pipelines.length) {
     const legacy = await funnelCounts(start, end, _connectionId, managerIds);

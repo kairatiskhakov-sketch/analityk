@@ -65,10 +65,22 @@ export async function GET(req: Request) {
       console.log("Total amount:", totalAmount);
 
       const totalLeads = leads.length;
+      const wonDealsCount = wonDeals.length;
       const wonLeadsCount = leads.filter(leadIsWon).length;
       const lostLeadsCount = leads.filter(leadIsLost).length;
-      const avgDeal =
-        wonLeadsCount > 0 ? totalAmount / wonLeadsCount : 0;
+      const conversion =
+        totalLeads > 0 ? Math.round((wonDealsCount / totalLeads) * 100) : 0;
+      const lostPct =
+        totalLeads > 0 ? Math.round((lostLeadsCount / totalLeads) * 100) : 0;
+      if (conversion > 100) {
+        console.warn("Conversion > 100%:", {
+          wonDeals: wonDealsCount,
+          totalLeads,
+          dateFrom: df,
+          dateTo: dt,
+        });
+      }
+      const avgDeal = wonDealsCount > 0 ? totalAmount / wonDealsCount : 0;
 
       return jsonOk({
         period: { start, end },
@@ -80,6 +92,8 @@ export async function GET(req: Request) {
             (l) => !leadIsWon(l) && !leadIsLost(l),
           ).length,
           salesAmount: totalAmount,
+          conversion,
+          lostPct,
         },
         avgDeal,
         error: null,

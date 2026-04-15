@@ -13,12 +13,14 @@ export async function fetchDealsUncached(
   dateFrom: string,
   dateTo: string,
   managerIds?: string[],
+  categoryId?: string,
 ): Promise<BitrixDeal[]> {
   const api = new BitrixAPI(webhookUrl);
   return api.getDeals({
     dateFrom,
     dateTo,
     managerIds: managerIds?.length ? managerIds : undefined,
+    categoryId: categoryId || undefined,
   });
 }
 

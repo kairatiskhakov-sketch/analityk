@@ -46,6 +46,8 @@ export async function fetchDealsMergedByChunks(
   dateFrom: string,
   dateTo: string,
   select: readonly string[] = PLAN_FACT_DEAL_SELECT,
+  categoryId?: string,
+  stageIds?: string[],
 ): Promise<BitrixDeal[]> {
   const api = new BitrixAPI(webhookUrl);
   const chunks = splitIntoWeeks(dateFrom, dateTo);
@@ -55,6 +57,8 @@ export async function fetchDealsMergedByChunks(
       dateFrom: chunk.from,
       dateTo: chunk.to,
       select: [...select],
+      categoryId,
+      stageIds,
     });
     for (const d of deals) {
       const id = d.ID != null ? String(d.ID) : "";

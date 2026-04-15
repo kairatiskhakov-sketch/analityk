@@ -8,6 +8,7 @@ import {
   getActiveBitrixConnection,
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
+import { parseManagerIdsFromSearchParams } from "@/lib/dashboard/dashboard-query";
 import { jsonError, jsonOk } from "@/lib/http/json";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +34,7 @@ export async function GET(req: Request) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") ?? "20", 10)));
     const dateFrom = searchParams.get("dateFrom");
     const dateTo = searchParams.get("dateTo");
+    const managerIds = parseManagerIdsFromSearchParams(searchParams);
 
     const conn = await getActiveBitrixConnection();
     const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
@@ -49,7 +51,7 @@ export async function GET(req: Request) {
     }
 
     const [leads, managers, sources] = await Promise.all([
-      fetchLeadsCached(url, ymd(start), ymd(end)),
+      fetchLeadsCached(url, ymd(start), ymd(end), managerIds),
       fetchManagersCached(url),
       fetchSourcesCatalogCached(url),
     ]);

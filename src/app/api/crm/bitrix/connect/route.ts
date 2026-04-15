@@ -1,4 +1,5 @@
 import { encrypt } from "@/lib/crypto";
+import { autoLoadStageConfigs } from "@/lib/bitrix/auto-stage-config";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { normalizeBitrixDomain } from "@/lib/integrations/bitrix24/client";
 import { parseBitrixWebhookUrl } from "@/lib/integrations/bitrix24/parse-webhook";
@@ -103,15 +104,20 @@ export async function POST(req: Request) {
           },
         });
 
-    void syncBitrix24Connection(connection.id).catch((err) => {
-      console.error("Bitrix24 loadDictionaries:", err);
-    });
+    let loadedStages = 0;
+    try {
+      await syncBitrix24Connection(connection.id);
+      loadedStages = await autoLoadStageConfigs(raw);
+    } catch (err) {
+      console.error("Bitrix24 initial sync:", err);
+    }
 
     return jsonOk({
       success: true,
       domain,
       userId: profileUserId,
       connectionId: connection.id,
+      loadedStages,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Не удалось подключиться к Bitrix24";

@@ -1,27 +1,28 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import {
+  Bar,
+  CartesianGrid,
   Cell,
-  Legend,
+  ComposedChart,
+  Line,
   Pie,
   PieChart,
   ResponsiveContainer,
   Tooltip,
+  XAxis,
+  YAxis,
 } from "recharts";
 import type { DashboardOverview, FunnelApi } from "@/lib/dashboard/overview-stats";
 import { periodKeyFromDate } from "@/lib/plan/period";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { Card, CardHeader, KpiCard, PageTopBar } from "@/components/ui";
-import { ManagerSelect } from "@/components/ui/ManagerSelect";
-import { PeriodSelector } from "@/components/ui/PeriodSelector";
-import { useModules } from "@/hooks/useModules";
+import { Card, CardHeader, PageTopBar } from "@/components/ui";
+import { GlobalFilters } from "@/components/ui/GlobalFilters";
 import type { Period } from "@/lib/dashboard/range";
-
-type Mgr = { id: string; name: string };
-type Pipe = { id: string; externalId: string; name: string };
+import { useModules } from "@/hooks/useModules";
 
 const PIE_COLORS = [
   "var(--accent)",
@@ -34,18 +35,6 @@ const PIE_COLORS = [
   "var(--muted)",
 ];
 
-function buildQuery(
-  sp: URLSearchParams,
-  overrides: Record<string, string | undefined>,
-): string {
-  const q = new URLSearchParams(sp.toString());
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v === undefined || v === "") q.delete(k);
-    else q.set(k, v);
-  }
-  return q.toString();
-}
-
 export function DashboardClient({
   dateFrom,
   dateTo,
@@ -57,15 +46,16 @@ export function DashboardClient({
   preset: Period;
   rangeLabel: string;
 }) {
-  const router = useRouter();
+  const { isEnabled } = useModules();
   const sp = useSearchParams();
-
-  const [managers, setManagers] = useState<Mgr[]>([]);
-  const [pipelines, setPipelines] = useState<Pipe[]>([]);
-  const [selManagers, setSelManagers] = useState<string[]>([]);
-  const [selPipeline, setSelPipeline] = useState<string>("");
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [funnels, setFunnels] = useState<FunnelApi[]>([]);
+  const [series, setSeries] = useState<
+    { date: string; leads: number; closed: number; sales: number }[]
+  >([]);
+  const [managerRank, setManagerRank] = useState<
+    { name: string; deals: number; amount: number; trendPct: number }[]
+  >([]);
   const [hasCrm, setHasCrm] = useState(true);
   const [openFunnel, setOpenFunnel] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -75,8 +65,9 @@ export function DashboardClient({
     pct: number;
   } | null>(null);
   const [stageConfigBanner, setStageConfigBanner] = useState(false);
-
-  const { isEnabled } = useModules();
+  const [fails, setFails] = useState<{ reason: string; count: number }[]>([]);
+  const [failsSource, setFailsSource] = useState<"leads" | "deals" | null>(null);
+  const [failsWarning, setFailsWarning] = useState<string | null>(null);
 
   const qData = useMemo(() => {
     const q = new URLSearchParams({
@@ -84,57 +75,26 @@ export function DashboardClient({
       dateTo: sp.get("dateTo") ?? dateTo,
       preset: sp.get("preset") ?? preset,
     });
-    const mids = sp.get("managerIds");
-    if (mids) q.set("managerIds", mids);
+    const mids = sp.get("managers");
+    if (mids) q.set("managers", mids);
     const pid = sp.get("pipelineId");
     if (pid) q.set("pipelineId", pid);
+    const stageIds = sp.get("stageIds");
+    if (stageIds) q.set("stageIds", stageIds);
     return q.toString();
   }, [dateFrom, dateTo, preset, sp]);
-
-  const syncFiltersFromUrl = useCallback(() => {
-    const m = sp.get("managerIds");
-    setSelManagers(m ? m.split(",").filter(Boolean) : []);
-    setSelPipeline(sp.get("pipelineId") ?? "");
-  }, [sp]);
-
-  useEffect(() => {
-    syncFiltersFromUrl();
-  }, [syncFiltersFromUrl]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [mRes, pRes] = await Promise.all([
-          fetch("/api/managers/list", { cache: "no-store" }),
-          fetch("/api/dashboard/pipelines", { cache: "no-store" }),
-        ]);
-        const mj = (await mRes.json()) as { managers?: Mgr[] };
-        const pj = (await pRes.json()) as { pipelines?: Pipe[] };
-        if (!cancelled) {
-          setManagers(mj.managers ?? []);
-          setPipelines(pj.pipelines ?? []);
-        }
-      } catch {
-        if (!cancelled) {
-          setManagers([]);
-          setPipelines([]);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoadError(null);
       try {
-        const [oRes, fRes] = await Promise.all([
+        const [oRes, fRes, cRes, mRes, failsRes] = await Promise.all([
           fetch(`/api/dashboard/overview?${qData}`, { cache: "no-store" }),
           fetch(`/api/dashboard/funnels?${qData}`, { cache: "no-store" }),
+          fetch(`/api/dashboard/chart?${qData}`, { cache: "no-store" }),
+          fetch(`/api/managers?${qData}`, { cache: "no-store" }),
+          fetch(`/api/leads/fails?${qData}`, { cache: "no-store" }),
         ]);
         const oj = (await oRes.json()) as {
           overview?: DashboardOverview | null;
@@ -142,6 +102,17 @@ export function DashboardClient({
           error?: string;
         };
         const fj = (await fRes.json()) as { funnels?: FunnelApi[] };
+        const cj = (await cRes.json()) as {
+          series?: { date: string; leads: number; closed: number; sales: number }[];
+        };
+        const mj = (await mRes.json()) as {
+          ranking?: { name: string; deals: number; amount: number }[];
+        };
+        const failsJson = (await failsRes.json()) as {
+          fails?: { reason: string; count: number }[];
+          source?: "leads" | "deals";
+          warning?: string;
+        };
         if (!cancelled) {
           if (!oRes.ok) {
             setLoadError(
@@ -162,12 +133,46 @@ export function DashboardClient({
           setHasCrm(oj.hasCrm !== false);
           setOverview(oj.overview ?? null);
           setFunnels(fj.funnels ?? []);
+          setSeries(cj.series ?? []);
+          setFails(failsJson.fails ?? []);
+          setFailsSource(failsJson.source ?? null);
+          setFailsWarning(failsJson.warning ?? null);
+
+          const prevParams = new URLSearchParams(qData);
+          const curFrom = new Date((sp.get("dateFrom") ?? dateFrom) + "T00:00:00");
+          const curTo = new Date((sp.get("dateTo") ?? dateTo) + "T00:00:00");
+          const days = Math.max(1, Math.round((curTo.getTime() - curFrom.getTime()) / 86400000) + 1);
+          const prevTo = new Date(curFrom);
+          prevTo.setDate(prevTo.getDate() - 1);
+          const prevFrom = new Date(prevTo);
+          prevFrom.setDate(prevFrom.getDate() - days + 1);
+          const f = (d: Date) =>
+            `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          prevParams.set("dateFrom", f(prevFrom));
+          prevParams.set("dateTo", f(prevTo));
+          const prevRes = await fetch(`/api/managers?${prevParams.toString()}`, { cache: "no-store" });
+          const prevJson = (await prevRes.json()) as {
+            ranking?: { name: string; deals: number; amount: number }[];
+          };
+          const prevByName = new Map((prevJson.ranking ?? []).map((r) => [r.name, r.amount]));
+          setManagerRank(
+            (mj.ranking ?? []).slice(0, 5).map((r) => {
+              const prev = prevByName.get(r.name) ?? 0;
+              const trendPct = prev > 0 ? Math.round(((r.amount - prev) / prev) * 100) : 0;
+              return { ...r, trendPct };
+            }),
+          );
         }
       } catch (e) {
         if (!cancelled) {
           setLoadError(e instanceof Error ? e.message : "Ошибка");
           setOverview(null);
           setFunnels([]);
+          setSeries([]);
+          setManagerRank([]);
+          setFails([]);
+          setFailsSource(null);
+          setFailsWarning(null);
         }
       }
     })();
@@ -195,11 +200,16 @@ export function DashboardClient({
 
   useEffect(() => {
     const period = periodKeyFromDate(new Date(), "month");
+    const pipelineId = sp.get("pipelineId");
+    const stageIds = sp.get("stageIds");
+    const query = new URLSearchParams({
+      period,
+      periodType: "month",
+    });
+    if (pipelineId) query.set("pipelineId", pipelineId);
+    if (stageIds) query.set("stageIds", stageIds);
     let cancelled = false;
-    fetch(
-      `/api/plan/facts?period=${encodeURIComponent(period)}&periodType=month`,
-      { cache: "no-store" },
-    )
+    fetch(`/api/plan/facts?${query.toString()}`, { cache: "no-store" })
       .then((r) => r.json())
       .then(
         (data: {
@@ -223,33 +233,40 @@ export function DashboardClient({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sp]);
 
-  function pushFilters(overrides?: { managerIds?: string[] }) {
-    const mids = overrides?.managerIds ?? selManagers;
-    const qs = buildQuery(sp, {
-      dateFrom: sp.get("dateFrom") ?? dateFrom,
-      dateTo: sp.get("dateTo") ?? dateTo,
-      preset: sp.get("preset") ?? preset,
-      managerIds: mids.length ? mids.join(",") : undefined,
-      pipelineId: selPipeline || undefined,
-    });
-    router.push(`/dashboard?${qs}`);
-    router.refresh();
-  }
+  const failPie = fails.map((x) => ({ name: x.reason, value: x.count }));
+  const srcPie = overview?.sources?.map((x) => ({ name: x.name, value: x.count })) ?? [];
+  const totalLeads = overview?.leads.total ?? 0;
+  const totalClosed = overview?.deals.won.count ?? 0;
+  const totalSales = overview?.deals.won.sum ?? 0;
+  const avgCheck = totalClosed > 0 ? totalSales / totalClosed : 0;
+  const totalFailed = overview?.leads.lost ?? 0;
+  const failRate = totalLeads > 0 ? Math.round((totalFailed / totalLeads) * 100) : 0;
+  const todayLabel = new Date().toISOString().slice(0, 10);
+  const leadsToday = series.find((d) => d.date === todayLabel)?.leads ?? 0;
+  const prevHalf = Math.max(1, Math.floor(series.length / 2));
+  const leadsTrend = series.length
+    ? Math.round(
+        (((series.slice(-prevHalf).reduce((s, x) => s + x.leads, 0) || 0) -
+          (series.slice(0, prevHalf).reduce((s, x) => s + x.leads, 0) || 0)) /
+          Math.max(1, series.slice(0, prevHalf).reduce((s, x) => s + x.leads, 0))) *
+          100,
+      )
+    : 0;
+  const salesPrev = series.slice(0, prevHalf).reduce((s, x) => s + x.sales, 0);
+  const salesNow = series.slice(-prevHalf).reduce((s, x) => s + x.sales, 0);
+  const salesTrend = series.length
+    ? Math.round((((salesNow || 0) - (salesPrev || 0)) / Math.max(1, salesPrev)) * 100)
+    : 0;
+  const conversion = totalLeads > 0 ? Math.min(100, Math.round((totalClosed / totalLeads) * 100)) : 0;
 
-  const failPie =
-    overview?.failReasons?.map((x) => ({ name: x.name, value: x.count })) ??
-    [];
-  const srcPie =
-    overview?.sources?.map((x) => ({ name: x.name, value: x.count })) ?? [];
-
-  const tipStyle = {
-    background: "#1a1a1a",
-    border: "1px solid #333333",
+  const tipStyle: React.CSSProperties = {
+    background: "rgba(26,22,53,0.9)",
+    border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: 8,
     fontSize: 11,
-    color: "#ffffff",
+    color: "#ffffff"
   };
 
   return (
@@ -260,7 +277,8 @@ export function DashboardClient({
         right={null}
       />
 
-      <div className="flex-1 space-y-3 overflow-y-auto px-6 py-4">
+      <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+        <GlobalFilters showStages />
         {stageConfigBanner ? (
           <div
             className="flex flex-col gap-2 rounded-[12px] border px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
@@ -282,78 +300,6 @@ export function DashboardClient({
             </Link>
           </div>
         ) : null}
-
-        <div
-          className="flex flex-col gap-3 rounded-[12px] border p-3 lg:flex-row lg:flex-wrap lg:items-end"
-          style={{ borderColor: "var(--border)", background: "var(--surface2)" }}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className="mb-1 block w-full text-[9.5px] font-medium uppercase tracking-wide lg:mb-0 lg:w-auto lg:mr-2"
-              style={{ color: "var(--hint)" }}
-            >
-              Период
-            </span>
-            <PeriodSelector
-              basePath="/dashboard"
-              initialPreset={preset}
-              initialDateFrom={dateFrom}
-              initialDateTo={dateTo}
-            />
-          </div>
-
-          <div className="min-w-[200px] flex-1">
-            <label
-              className="mb-1 block text-[9.5px] font-medium uppercase tracking-wide"
-              style={{ color: "var(--hint)" }}
-            >
-              Менеджеры
-            </label>
-            <ManagerSelect
-              managers={managers}
-              selected={selManagers}
-              onChange={(ids) => {
-                setSelManagers(ids);
-                pushFilters({ managerIds: ids });
-              }}
-            />
-          </div>
-
-          <div className="min-w-[160px]">
-            <label
-              className="mb-1 block text-[9.5px] font-medium uppercase tracking-wide"
-              style={{ color: "var(--hint)" }}
-            >
-              Воронка
-            </label>
-            <select
-              value={selPipeline}
-              onChange={(e) => setSelPipeline(e.target.value)}
-              className="w-full rounded-[12px] border px-2 py-2 text-[12px]"
-              style={{
-                borderColor: "var(--border2)",
-                background: "var(--surface)",
-                color: "var(--text)",
-              }}
-            >
-              <option value="">Все воронки</option>
-              {pipelines.map((p) => (
-                <option key={p.id} value={p.externalId}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => pushFilters()}
-            className="rounded-[10px] px-4 py-2 text-[13px] font-semibold transition-opacity hover:opacity-90"
-            style={{ background: "var(--accent)", color: "#000000" }}
-          >
-            Применить
-          </button>
-        </div>
 
         {loadError ? (
           <div
@@ -426,157 +372,246 @@ export function DashboardClient({
 
         {overview && hasCrm ? (
           <>
-            {isEnabled("overview_stats") ? (
-              <>
-                <p
-                  className="module-enter text-[12px] leading-snug"
-                  style={{ color: "var(--hint)" }}
-                >
-                  За период:{" "}
-                  <span style={{ color: "var(--text)" }}>
-                    {formatNumber(overview.general.totalDeals)} сделок
-                  </span>
-                  {" · "}
-                  <span style={{ color: "var(--text)" }}>
-                    {formatNumber(overview.general.activePipelines)} активных воронок
-                  </span>
-                  {" · "}
-                  <span style={{ color: "var(--text)" }}>
-                    {formatNumber(overview.general.leadsInPeriod)} лидов
-                  </span>
-                </p>
-
-                <div className="module-enter grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-                  <KpiCard
-                    className="delay-1"
-                    label="Лидов"
-                    value={formatNumber(overview.leads.total)}
-                    chip={{ text: "всего", type: "neutral" }}
-                  />
-                  <KpiCard
-                    className="delay-2"
-                    label="Выиграно (лиды)"
-                    value={formatNumber(overview.leads.won)}
-                    chip={{ text: "won", type: "up" }}
-                  />
-                  <KpiCard
-                    className="delay-3"
-                    label="Проиграно (лиды)"
-                    value={formatNumber(overview.leads.lost)}
-                    chip={{ text: "lost", type: "down" }}
-                  />
-                  <KpiCard
-                    className="delay-4"
-                    label="Сумма (лиды)"
-                    value={formatCurrency(overview.leads.salesAmount)}
-                    chip={{ text: "won", type: "blue" }}
-                  />
-                </div>
-              </>
-            ) : null}
-
-            {isEnabled("financial_stats") ? (
-              <div className="module-enter grid grid-cols-1 gap-2.5 md:grid-cols-3">
-                <KpiCard
-                  className="delay-5"
-                  label="В работе (сделки)"
-                  value={`${formatNumber(overview.deals.progress.count)} · ${formatCurrency(overview.deals.progress.sum)}`}
-                  chip={{ text: "progress", type: "neutral" }}
-                />
-                <KpiCard
-                  className="delay-6"
-                  label="Оплачено / выиграно"
-                  value={`${formatNumber(overview.deals.won.count)} · ${formatCurrency(overview.deals.won.sum)}`}
-                  chip={{ text: "won", type: "up" }}
-                />
-                <KpiCard
-                  className="delay-7"
-                  label="Отказ"
-                  value={`${formatNumber(overview.deals.lost.count)} · ${formatCurrency(overview.deals.lost.sum)}`}
-                  chip={{ text: "lost", type: "down" }}
-                />
-              </div>
-            ) : null}
-
-            <div className="grid gap-3 lg:grid-cols-2">
-              {isEnabled("fails_chart") ? (
-              <Card className="module-enter min-h-72 min-w-0">
-                <CardHeader title="Причины отказа" sub="топ-7 + другое" />
-                <div className="h-64 w-full min-w-0">
-                  {failPie.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={failPie}
-                          dataKey="value"
-                          nameKey="name"
-                          cx="50%"
-                          cy="50%"
-                          outerRadius={90}
-                          label={({ name, percent }) =>
-                            `${name ?? ""} ${((percent ?? 0) * 100).toFixed(0)}%`
-                          }
-                        >
-                          {failPie.map((_, i) => (
-                            <Cell
-                              key={i}
-                              fill={PIE_COLORS[i % PIE_COLORS.length]}
-                            />
-                          ))}
-                        </Pie>
-                        <Tooltip contentStyle={tipStyle} />
-                        <Legend />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <p className="p-4 text-[13px]" style={{ color: "var(--hint)" }}>
-                      За выбранный период отказов нет 👍
-                    </p>
-                  )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <Card>
+                <div className="p-4">
+                  <p className="text-[11px]" style={{ color: "var(--hint)" }}>Лидов получено</p>
+                  <p className="mt-1 text-[24px] font-semibold">{formatNumber(totalLeads)}</p>
+                  <p className="text-[12px]" style={{ color: leadsTrend >= 0 ? "var(--green)" : "var(--red)" }}>
+                    {leadsTrend >= 0 ? "▲" : "▼"} {Math.abs(leadsTrend)}%
+                  </p>
                 </div>
               </Card>
-              ) : null}
-
-              {isEnabled("sources_chart") ? (
-              <Card className="module-enter min-h-72 min-w-0">
-                <CardHeader title="Источники лидов" sub="из CRM" />
-                <div className="h-64 w-full min-w-0">
-                  {srcPie.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={srcPie}
-                          dataKey="value"
-                          nameKey="name"
-                          cx="50%"
-                          cy="50%"
-                          outerRadius={90}
-                          label={({ name, percent }) =>
-                            `${name ?? ""} ${((percent ?? 0) * 100).toFixed(0)}%`
-                          }
-                        >
-                          {srcPie.map((_, i) => (
-                            <Cell
-                              key={i}
-                              fill={PIE_COLORS[i % PIE_COLORS.length]}
-                            />
-                          ))}
-                        </Pie>
-                        <Tooltip contentStyle={tipStyle} />
-                        <Legend />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <p className="p-4 text-[13px]" style={{ color: "var(--hint)" }}>
-                      Нет данных
-                    </p>
-                  )}
+              <Card>
+                <div className="p-4">
+                  <p className="text-[11px]" style={{ color: "var(--hint)" }}>Сделок закрыто</p>
+                  <p className="mt-1 text-[24px] font-semibold">{formatNumber(totalClosed)}</p>
+                  <p className="text-[12px]" style={{ color: "var(--muted)" }}>Конверсия {conversion}%</p>
                 </div>
               </Card>
-              ) : null}
+              <Card>
+                <div className="p-4">
+                  <p className="text-[11px]" style={{ color: "var(--hint)" }}>Сумма продаж ₸</p>
+                  <p className="mt-1 text-[24px] font-semibold">{formatCurrency(totalSales)}</p>
+                  <p className="text-[12px]" style={{ color: salesTrend >= 0 ? "var(--green)" : "var(--red)" }}>
+                    {salesTrend >= 0 ? "▲" : "▼"} {Math.abs(salesTrend)}%
+                  </p>
+                </div>
+              </Card>
+              <Card>
+                <div className="p-4">
+                  <p className="text-[11px]" style={{ color: "var(--hint)" }}>Средний чек ₸</p>
+                  <p className="mt-1 text-[24px] font-semibold">{formatCurrency(avgCheck)}</p>
+                </div>
+              </Card>
+              <Card>
+                <div className="p-4">
+                  <p className="text-[11px]" style={{ color: "var(--hint)" }}>В работе</p>
+                  <p className="mt-1 text-[24px] font-semibold">{formatNumber(overview.deals.progress.count)}</p>
+                  <p className="text-[12px]" style={{ color: "var(--muted)" }}>
+                    {formatCurrency(overview.deals.progress.sum)} ₸
+                  </p>
+                </div>
+              </Card>
+              <Card>
+                <div className="p-4">
+                  <p className="text-[11px]" style={{ color: "var(--hint)" }}>Провалено</p>
+                  <p className="mt-1 text-[24px] font-semibold">{formatNumber(totalFailed)}</p>
+                  <p className="text-[12px]" style={{ color: "var(--muted)" }}>{failRate}% от лидов</p>
+                </div>
+              </Card>
+              {planSummary ? (
+                <Card>
+                  <div className="p-4">
+                    <p className="text-[11px]" style={{ color: "var(--hint)" }}>% выполнения плана</p>
+                    <p className="mt-1 text-[24px] font-semibold">{planSummary.pct}%</p>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full" style={{ background: "var(--border)" }}>
+                      <div
+                        className="h-2 rounded-full"
+                        style={{
+                          width: `${Math.min(100, planSummary.pct)}%`,
+                          background: planSummary.pct >= 70 ? "var(--green)" : "var(--red)",
+                        }}
+                      />
+                    </div>
+                  </div>
+                </Card>
+              ) : (
+                <Card>
+                  <div className="p-4">
+                    <p className="text-[11px]" style={{ color: "var(--hint)" }}>% выполнения плана</p>
+                    <p className="mt-1 text-[14px]" style={{ color: "var(--muted)" }}>План не задан</p>
+                  </div>
+                </Card>
+              )}
+              <Card>
+                <div className="p-4">
+                  <p className="text-[11px]" style={{ color: "var(--hint)" }}>Новых лидов сегодня</p>
+                  <p className="mt-1 text-[24px] font-semibold">{formatNumber(leadsToday)}</p>
+                </div>
+              </Card>
             </div>
 
-            {isEnabled("funnels_detail") ? (
+            <Card className="min-h-80">
+              <CardHeader title="Динамика по дням" sub="Лиды, закрытые сделки, сумма продаж" />
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={series}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tick={{ fill: "rgba(255,255,255,0.35)", fontSize: 11 }} tickFormatter={(v) => String(v).slice(5)} />
+                    <YAxis yAxisId="left" tick={{ fill: "rgba(255,255,255,0.35)", fontSize: 11 }} />
+                    <YAxis yAxisId="right" orientation="right" tick={{ fill: "rgba(255,255,255,0.35)", fontSize: 11 }} />
+                    <Tooltip contentStyle={tipStyle} />
+                    <Bar yAxisId="right" dataKey="sales" fill="rgba(200,200,200,0.45)" name="Сумма продаж" />
+                    <Line yAxisId="left" type="monotone" dataKey="leads" stroke="#4C8DFF" strokeWidth={2.5} dot={false} name="Лиды" />
+                    <Line yAxisId="left" type="monotone" dataKey="closed" stroke="#00E676" strokeWidth={2.5} dot={false} name="Сделки закрыто" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card className="module-enter min-w-0">
+                <CardHeader
+                  title={`Источники (${srcPie.reduce((s, x) => s + x.value, 0)})`}
+                  sub="реальные из CRM"
+                />
+                <div className="flex flex-col items-center px-4 pb-4">
+                  {srcPie.length ? (
+                    <>
+                      <div className="h-52 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={srcPie}
+                              dataKey="value"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={52}
+                              outerRadius={90}
+                            >
+                              {srcPie.map((_, i) => (
+                                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                              ))}
+                            </Pie>
+                            <Tooltip contentStyle={tipStyle} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-2">
+                        {srcPie.map((item, idx) => (
+                          <div key={item.name} className="flex items-center gap-1.5 text-[12px]">
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-full"
+                              style={{ background: PIE_COLORS[idx % PIE_COLORS.length] }}
+                            />
+                            <span style={{ color: "var(--text)" }}>
+                              {item.name} ({item.value})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="py-8 text-[13px]" style={{ color: "var(--hint)" }}>Нет данных</p>
+                  )}
+                </div>
+              </Card>
+
+              <Card className="module-enter min-w-0">
+                <CardHeader
+                  title={`Причины отказа (${failPie.reduce((s, x) => s + x.value, 0)})`}
+                  sub={failsSource === "deals" ? "по стадиям сделок" : "из CRM"}
+                />
+                <div className="flex flex-col items-center px-4 pb-4">
+                  {failsWarning ? (
+                    <div
+                      className="mb-3 flex w-full items-center justify-between gap-2 rounded-[10px] border px-3 py-2"
+                      style={{ borderColor: "var(--border)", background: "var(--amber-bg)", color: "var(--amber)" }}
+                    >
+                      <p className="text-[12px]">⚠️ Настройте этапы провала в Настройках</p>
+                      <Link href="/dashboard/settings" className="text-[12px] font-semibold underline" style={{ color: "var(--text)" }}>
+                        Открыть
+                      </Link>
+                    </div>
+                  ) : null}
+                  {failPie.length ? (
+                    <>
+                      <div className="h-52 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={failPie}
+                              dataKey="value"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={52}
+                              outerRadius={90}
+                            >
+                              {failPie.map((_, i) => (
+                                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                              ))}
+                            </Pie>
+                            <Tooltip contentStyle={tipStyle} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-2">
+                        {failPie.map((item, idx) => (
+                          <div key={item.name} className="flex items-center gap-1.5 text-[12px]">
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-full"
+                              style={{ background: PIE_COLORS[idx % PIE_COLORS.length] }}
+                            />
+                            <span style={{ color: "var(--text)" }}>
+                              {item.name} ({item.value})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="space-y-2 py-8 text-[13px]" style={{ color: "var(--hint)" }}>
+                      <p>Нет данных за период.</p>
+                      <p>Попробуйте выбрать 30 дней.</p>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            </div>
+
+            <Card>
+              <CardHeader title="Рейтинг менеджеров" sub="Топ-5 по сумме продаж" />
+              <div className="space-y-2 p-3">
+                {managerRank.map((m, idx) => {
+                  const topAmount = managerRank[0]?.amount || 1;
+                  const pct = Math.round((m.amount / topAmount) * 100);
+                  const initials = m.name.split(" ").slice(0, 2).map((x) => x[0]).join("").toUpperCase();
+                  return (
+                    <div key={m.name} className="rounded-[10px] border p-3" style={{ borderColor: "var(--border)" }}>
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-semibold" style={{ background: idx === 0 ? "linear-gradient(135deg,#F9D66B,#D4A017)" : "linear-gradient(135deg,#7B5CF5,#E040FB)", color: "#fff" }}>{initials}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between">
+                            <span className="truncate text-[13px]" style={{ color: "var(--text)" }}>{m.name}</span>
+                            <span className="text-[13px] font-semibold">{formatCurrency(m.amount)} ₸</span>
+                          </div>
+                          <div className="mt-2 h-1.5 overflow-hidden rounded-full" style={{ background: "var(--border)" }}>
+                            <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: "var(--accent)" }} />
+                          </div>
+                          <p className="mt-1 text-[11px]" style={{ color: m.trendPct >= 0 ? "var(--green)" : "var(--red)" }}>
+                            {m.trendPct >= 0 ? "▲" : "▼"} {Math.abs(m.trendPct)}% · сделок {m.deals}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+
             <Card className="module-enter">
               <CardHeader title="Детализация по воронкам" sub="сделки по стадиям" />
               <div className="space-y-2">
@@ -618,10 +653,7 @@ export function DashboardClient({
                           >
                             <table className="w-full text-[12px]">
                               <thead>
-                                <tr
-                                  className="text-[10px] font-semibold uppercase tracking-wide"
-                                  style={{ color: "var(--hint)" }}
-                                >
+                                <tr className="text-[11px] font-semibold uppercase tracking-[0.1em]" style={{ color: "rgba(255,255,255,0.4)" }}>
                                   <th className="py-1 text-left font-medium">
                                     Стадия
                                   </th>
@@ -631,11 +663,14 @@ export function DashboardClient({
                                   <th className="py-1 text-right font-medium">
                                     Сумма
                                   </th>
+                                  <th className="py-1 text-right font-medium">
+                                    %
+                                  </th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {f.stages.map((s) => (
-                                  <tr key={s.name}>
+                                  <tr key={s.name} className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
                                     <td className="py-1" style={{ color: "var(--text)" }}>
                                       {s.name}
                                     </td>
@@ -644,6 +679,9 @@ export function DashboardClient({
                                     </td>
                                     <td className="py-1 text-right">
                                       {formatCurrency(s.amount)}
+                                    </td>
+                                    <td className="py-1 text-right">
+                                      {f.totalDeals > 0 ? `${Math.round((s.count / f.totalDeals) * 100)}%` : "0%"}
                                     </td>
                                   </tr>
                                 ))}
@@ -657,7 +695,6 @@ export function DashboardClient({
                 )}
               </div>
             </Card>
-            ) : null}
           </>
         ) : null}
       </div>

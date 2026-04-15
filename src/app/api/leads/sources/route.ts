@@ -4,9 +4,9 @@ import {
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
 import { jsonError, jsonOk } from "@/lib/http/json";
-import { parseManagerIdsFromSearchParams } from "@/lib/dashboard/dashboard-query";
-import { parseDashboardRangeFromSearchParams } from "@/lib/dashboard/range";
-import { leadsBySource } from "@/lib/dashboard/stats";
+import { parseDashboardFilters } from "@/lib/dashboard/dashboard-query";
+import { leadIsLost, leadIsWon } from "@/lib/bitrix/api";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +17,7 @@ function ymd(d: Date): string {
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const connectionId = searchParams.get("connectionId");
-    const { start, end } = parseDashboardRangeFromSearchParams(searchParams);
-    const managerIds = parseManagerIdsFromSearchParams(searchParams);
+    const filters = parseDashboardFilters(searchParams);
 
     const conn = await getActiveBitrixConnection();
     const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
@@ -27,15 +25,38 @@ export async function GET(req: Request) {
       return jsonOk({ sources: [] });
     }
 
-    const df = ymd(start);
-    const dt = ymd(end);
-    const leads = await fetchLeadsCached(url, df, dt, managerIds);
-    console.log(
-      "Sample SOURCE_IDs:",
-      Array.from(new Set(leads.map((l) => l.SOURCE_ID))).slice(0, 10),
+    const leads = await fetchLeadsCached(
+      url,
+      ymd(filters.start),
+      ymd(filters.end),
+      filters.managerIds,
     );
+    const rows = await prisma.crmDictionary.findMany({
+      where: { crmType: "bitrix24", entityId: "SOURCE" },
+    });
+    const sourceMap = new Map(rows.map((r) => [r.externalId, r.name]));
 
-    const sources = await leadsBySource(start, end, connectionId, managerIds);
+    const grouped = new Map<string, { total: number; won: number; lost: number }>();
+    for (const l of leads) {
+      if (filters.pipelineId && String((l as { CATEGORY_ID?: string }).CATEGORY_ID ?? "") !== filters.pipelineId) continue;
+      const raw = String(l.SOURCE_ID ?? "");
+      const source = sourceMap.get(raw) ?? (raw || "Без источника");
+      const cur = grouped.get(source) ?? { total: 0, won: 0, lost: 0 };
+      cur.total += 1;
+      if (leadIsWon(l)) cur.won += 1;
+      if (leadIsLost(l)) cur.lost += 1;
+      grouped.set(source, cur);
+    }
+
+    const sources = Array.from(grouped.entries())
+      .map(([source, v]) => ({
+        source,
+        count: v.total,
+        won: v.won,
+        lost: v.lost,
+        conv: v.total > 0 ? Math.round((v.won / v.total) * 100) : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
     return jsonOk({ sources });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error";

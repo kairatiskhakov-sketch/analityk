@@ -98,7 +98,7 @@ export function PeriodSelector({
   return (
     <div
       className="relative flex flex-wrap items-center gap-1 rounded-[10px] p-1"
-      style={{ background: "var(--surface2)" }}
+      style={{ background: "rgba(255,255,255,0.05)", borderRadius: 12 }}
     >
       {PRESETS.map(({ id, label }) => {
         const active = selected === id;
@@ -109,8 +109,8 @@ export function PeriodSelector({
             onClick={() => applyPreset(id)}
             className={pillClass(active)}
             style={{
-              background: active ? "var(--accent)" : "transparent",
-              color: active ? "#000000" : "var(--muted)",
+              background: active ? "linear-gradient(135deg, #7B5CF5, #9B7FF8)" : "transparent",
+              color: active ? "#ffffff" : "var(--muted)",
               border: "none",
             }}
           >
@@ -131,8 +131,8 @@ export function PeriodSelector({
           }}
           className={pillClass(selected === "custom")}
           style={{
-            background: selected === "custom" ? "var(--accent)" : "transparent",
-            color: selected === "custom" ? "#000000" : "var(--muted)",
+            background: selected === "custom" ? "linear-gradient(135deg, #7B5CF5, #9B7FF8)" : "transparent",
+            color: selected === "custom" ? "#ffffff" : "var(--muted)",
             border: "none",
             display: "inline-flex",
             alignItems: "center",

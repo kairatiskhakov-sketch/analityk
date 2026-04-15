@@ -156,7 +156,8 @@ export function BitrixConnectForm({ initial, statusInitial }: Props) {
       }
       const p = data.result?.pipelinesCount ?? 0;
       const m = data.result?.managersCount ?? 0;
-      toast.success(`Обновлено: воронок ${p}, менеджеров ${m}`);
+      const s = (data.result as { loadedStages?: number } | undefined)?.loadedStages ?? 0;
+      toast.success(`Обновлено: воронок ${p}, менеджеров ${m}, этапов ${s}`);
       await mutate("/api/crm/status");
       router.refresh();
     } catch {

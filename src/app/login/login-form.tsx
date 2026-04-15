@@ -113,16 +113,16 @@ export function LoginForm() {
   return (
     <div
       className="flex min-h-screen items-center justify-center p-4"
-      style={{ background: "#0a0a0a" }}
+      style={{ background: "transparent" }}
     >
       <div
-        className="w-full max-w-[400px] rounded-[12px] border p-6 shadow-xl"
-        style={{ background: "var(--surface)", borderColor: "var(--border)" }}
+        className="glass w-full max-w-[420px] rounded-[18px] border p-6 shadow-xl"
+        style={{ borderColor: "var(--border)" }}
       >
         <div className="mb-6 flex flex-col items-center gap-2">
           <div
             className="flex h-10 w-10 items-center justify-center rounded-[10px] text-lg font-bold"
-            style={{ background: "var(--accent)", color: "#000000" }}
+            style={{ background: "linear-gradient(135deg, #7B5CF5, #E040FB)", color: "#ffffff" }}
           >
             S
           </div>
@@ -192,8 +192,7 @@ export function LoginForm() {
             <button
               type="submit"
               disabled={loading}
-              className="mt-2 w-full rounded-[10px] py-2.5 text-[13px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
-              style={{ background: "var(--accent)", color: "#000000" }}
+              className="btn-primary mt-2 w-full py-2.5 text-[13px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
             >
               {loading ? "…" : "Войти"}
             </button>
@@ -287,8 +286,7 @@ export function LoginForm() {
             <button
               type="submit"
               disabled={loading}
-              className="mt-2 w-full rounded-[10px] py-2.5 text-[13px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
-              style={{ background: "var(--accent)", color: "#000000" }}
+              className="btn-primary mt-2 w-full py-2.5 text-[13px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
             >
               {loading ? "…" : "Создать аккаунт"}
             </button>

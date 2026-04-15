@@ -53,7 +53,8 @@ export function createAmoClient(
         : Array.isArray(totalHeader)
           ? parseInt(totalHeader[0] ?? "0", 10)
           : 0;
-    return { data: res.data, total: Number.isNaN(total) ? 0 : total };
+    const payload = (res.data ?? {}) as T;
+    return { data: payload, total: Number.isNaN(total) ? 0 : total };
   }
 
   return { subdomain: s, baseUrl, raw, get };

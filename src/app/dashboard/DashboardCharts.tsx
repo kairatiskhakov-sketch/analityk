@@ -17,11 +17,11 @@ import { Card, CardHeader } from "@/components/ui";
 
 type Props = { dateFrom: string; dateTo: string };
 
-const GRID = "#1e1e1e";
-const TICK = { fill: "#555555", fontSize: 11 };
+const GRID = "rgba(255,255,255,0.05)";
+const TICK = { fill: "rgba(255,255,255,0.35)", fontSize: 11 };
 const TIP = {
-  background: "#1a1a1a",
-  border: "1px solid #333333",
+  background: "rgba(26,22,53,0.9)",
+  border: "1px solid rgba(255,255,255,0.1)",
   borderRadius: "8px",
   color: "#ffffff",
   fontSize: 11,
@@ -110,6 +110,12 @@ export function DashboardCharts({ dateFrom, dateTo }: Props) {
           <div className="h-64 w-full min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData}>
+                <defs>
+                  <linearGradient id="dashPurple" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#7B5CF5" />
+                    <stop offset="100%" stopColor="#E040FB" />
+                  </linearGradient>
+                </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
                 <XAxis
                   dataKey="date"
@@ -122,9 +128,9 @@ export function DashboardCharts({ dateFrom, dateTo }: Props) {
                 <Line
                   type="monotone"
                   dataKey="count"
-                  stroke="#c8ff00"
-                  strokeWidth={2}
-                  dot={{ fill: "#c8ff00", r: 3 }}
+                  stroke="url(#dashPurple)"
+                  strokeWidth={2.5}
+                  dot={{ fill: "#7B5CF5", r: 3 }}
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -155,7 +161,7 @@ export function DashboardCharts({ dateFrom, dateTo }: Props) {
                 <Legend />
                 <Bar
                   dataKey="count"
-                  fill="#c8ff00"
+                  fill="#7B5CF5"
                   name="Лиды"
                   radius={[0, 4, 4, 0]}
                   opacity={0.9}

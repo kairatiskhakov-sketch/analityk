@@ -164,12 +164,13 @@ export function ManagerSelect({ managers, selected, onChange, className }: Props
 
       {open ? (
         <div
-          className="absolute left-0 top-full z-50 mt-1 flex flex-col"
+          className="absolute left-0 top-full mt-1 flex flex-col"
           style={{
-            background: "var(--surface2)",
-            border: "1px solid var(--border2)",
+            zIndex: 100,
+            background: "#1a2236",
+            border: "1px solid rgba(255,255,255,0.12)",
             borderRadius: "12px",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.45)",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
             padding: 8,
             minWidth: 260,
             maxHeight: 360,
@@ -203,9 +204,10 @@ export function ManagerSelect({ managers, selected, onChange, className }: Props
               style={{
                 padding: "7px 8px",
                 borderRadius: "var(--r-sm)",
+                color: "rgba(240,244,255,0.8)",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#222222";
+                e.currentTarget.style.background = "rgba(255,255,255,0.06)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
@@ -241,9 +243,10 @@ export function ManagerSelect({ managers, selected, onChange, className }: Props
                   style={{
                     padding: "7px 8px",
                     borderRadius: "var(--r-sm)",
+                    color: "rgba(240,244,255,0.8)",
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "#222222";
+                    e.currentTarget.style.background = "rgba(255,255,255,0.06)";
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.background = "transparent";
@@ -265,7 +268,7 @@ export function ManagerSelect({ managers, selected, onChange, className }: Props
                   >
                     {getInitials(m.name)}
                   </span>
-                  <span className="min-w-0 flex-1 text-[13px]" style={{ color: "var(--text)" }}>
+                  <span className="min-w-0 flex-1 text-[13px]" style={{ color: "rgba(240,244,255,0.8)" }}>
                     {m.name}
                   </span>
                 </label>

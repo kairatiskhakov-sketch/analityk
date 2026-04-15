@@ -1,12 +1,19 @@
 import { encrypt, decrypt } from "@/lib/crypto";
 import { prisma } from "@/lib/prisma";
 import { createAmoClient } from "./client";
-import { amoFetchAllUsers } from "./methods";
+import { AMO_STATUS_LOST, AMO_STATUS_WON, amoStatusType } from "./mapper";
+import {
+  amoFetchAllUsers,
+  fetchAmoLossReasons,
+  fetchAmoPipelines,
+} from "./methods";
 import { amoTokenExpiresAt, refreshAmoAccessToken } from "./oauth";
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 export type AmoSyncResult = {
+  pipelinesCount: number;
+  lossReasonsCount: number;
   managersCount: number;
 };
 
@@ -87,7 +94,74 @@ export async function syncAmoConnection(
   const accessToken = await ensureAmoAccessToken(conn);
   const client = createAmoClient(conn.amoSubdomain!, accessToken);
 
-  const users = await amoFetchAllUsers(client);
+  const [pipelines, lossReasons, users] = await Promise.all([
+    fetchAmoPipelines(accessToken, conn.amoSubdomain!),
+    fetchAmoLossReasons(accessToken, conn.amoSubdomain!),
+    amoFetchAllUsers(client),
+  ]);
+
+  let pipelinesCount = 0;
+  for (const p of pipelines) {
+    for (const st of p._embedded?.statuses ?? []) {
+      const inferred =
+        st.id === AMO_STATUS_WON
+          ? "won"
+          : st.id === AMO_STATUS_LOST
+            ? "lost"
+            : amoStatusType(st);
+      const type = inferred === "ignore" ? "ignore" : inferred;
+      await prisma.stageConfig.upsert({
+        where: {
+          externalId_crmType: {
+            externalId: String(st.id),
+            crmType: "amocrm",
+          },
+        },
+        create: {
+          externalId: String(st.id),
+          name: st.name || `Статус ${st.id}`,
+          pipelineId: String(p.id),
+          pipelineName: p.name || `Воронка ${p.id}`,
+          crmType: "amocrm",
+          type,
+          sort: Number(st.sort ?? 0),
+          color: st.color ?? null,
+        },
+        update: {
+          name: st.name || `Статус ${st.id}`,
+          pipelineId: String(p.id),
+          pipelineName: p.name || `Воронка ${p.id}`,
+          type,
+          sort: Number(st.sort ?? 0),
+          color: st.color ?? null,
+        },
+      });
+      pipelinesCount += 1;
+    }
+  }
+
+  let lossReasonsCount = 0;
+  for (const lr of lossReasons) {
+    const ext = String(lr.id);
+    const name = lr.name?.trim() || ext;
+    await prisma.crmDictionary.upsert({
+      where: {
+        crmType_entityId_externalId: {
+          crmType: "amocrm",
+          entityId: "LOST_REASON",
+          externalId: ext,
+        },
+      },
+      create: {
+        crmType: "amocrm",
+        entityId: "LOST_REASON",
+        externalId: ext,
+        name,
+      },
+      update: { name },
+    });
+    lossReasonsCount += 1;
+  }
 
   let managersCount = 0;
   for (const u of users) {
@@ -115,5 +189,5 @@ export async function syncAmoConnection(
     data: { lastSyncAt: new Date() },
   });
 
-  return { managersCount };
+  return { pipelinesCount, lossReasonsCount, managersCount };
 }

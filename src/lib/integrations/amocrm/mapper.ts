@@ -1,71 +1,73 @@
 import type { UnifiedLead } from "@/lib/integrations/shared/mapper";
-import type { AmoCustomFieldValue, AmoLead, AmoPipeline } from "./types";
+import type { AmoCustomField, AmoLead, AmoPipeline, AmoStatus } from "./types";
 
 export type UnifiedLeadFromAmo = UnifiedLead;
 
-/** Резерв из ТЗ: конкретный status_id как «провал» (если нет type в воронке). */
-export const AMO_FALLBACK_LOST_STATUS_ID = 143;
+export const AMO_STATUS_WON = 142;
+export const AMO_STATUS_LOST = 143;
 
-type StatusIndex = Map<string, { type?: number }>;
+export function amoLeadIsWon(lead: AmoLead): boolean {
+  return lead.status_id === AMO_STATUS_WON;
+}
 
-function buildStatusIndex(pipelines: AmoPipeline[]): StatusIndex {
-  const m = new Map<string, { type?: number }>();
-  for (const p of pipelines) {
-    const statuses = p._embedded?.statuses ?? [];
-    for (const st of statuses) {
-      m.set(`${p.id}:${st.id}`, { type: st.type });
+export function amoLeadIsLost(lead: AmoLead): boolean {
+  return lead.status_id === AMO_STATUS_LOST;
+}
+
+export function amoLeadInProgress(lead: AmoLead): boolean {
+  return !amoLeadIsWon(lead) && !amoLeadIsLost(lead);
+}
+
+export function amoStatusType(
+  status: AmoStatus,
+): "won" | "lost" | "progress" | "ignore" {
+  if (status.id === AMO_STATUS_WON) return "won";
+  if (status.id === AMO_STATUS_LOST) return "lost";
+  if (status.type === 1) return "ignore";
+  return "progress";
+}
+
+export function extractAmoUTM(lead: AmoLead): {
+  source?: string;
+  medium?: string;
+  campaign?: string;
+  content?: string;
+  term?: string;
+} {
+  const fields = lead.custom_fields_values ?? [];
+  const findField = (codes: string[]) => {
+    for (const code of codes) {
+      const lc = code.toLowerCase();
+      const field = fields.find(
+        (f) =>
+          (f.field_code ?? "").toLowerCase() === lc ||
+          (f.field_name ?? "").toLowerCase() === lc,
+      );
+      const value = field?.values?.[0]?.value;
+      if (value != null && String(value).trim()) return String(value);
     }
-  }
-  return m;
-}
-
-function getStatusType(
-  pipelineId: number,
-  statusId: number,
-  index: StatusIndex,
-): number | undefined {
-  return index.get(`${pipelineId}:${statusId}`)?.type;
-}
-
-function extractUtmFromCustomFields(
-  fields: AmoCustomFieldValue[] | undefined,
-): Pick<
-  UnifiedLead,
-  "utmSource" | "utmMedium" | "utmCampaign" | "utmContent" | "gclid" | "fbclid"
-> {
-  const out: ReturnType<typeof extractUtmFromCustomFields> = {};
-  if (!fields?.length) return out;
-
-  for (const f of fields) {
-    const code = (f.field_code ?? f.field_name ?? "").toLowerCase();
-    const val = f.values?.[0]?.value;
-    const s = val == null ? "" : String(val);
-    if (!s) continue;
-
-    if (code.includes("utm_source") || code === "utm_source") out.utmSource = s;
-    else if (code.includes("utm_medium") || code === "utm_medium") out.utmMedium = s;
-    else if (code.includes("utm_campaign") || code === "utm_campaign") out.utmCampaign = s;
-    else if (code.includes("utm_content") || code === "utm_content") out.utmContent = s;
-    else if (code.includes("gclid")) out.gclid = s;
-    else if (code.includes("fbclid")) out.fbclid = s;
-  }
-
-  return out;
+    return undefined;
+  };
+  return {
+    source: findField(["utm_source", "UTM_SOURCE"]),
+    medium: findField(["utm_medium", "UTM_MEDIUM"]),
+    campaign: findField(["utm_campaign", "UTM_CAMPAIGN"]),
+    content: findField(["utm_content", "UTM_CONTENT"]),
+    term: findField(["utm_term", "UTM_TERM"]),
+  };
 }
 
 function pickPhoneEmailFromFields(
-  fields: AmoCustomFieldValue[] | undefined,
+  fields: AmoCustomField[] | null | undefined,
 ): { phone?: string; email?: string } {
   let phone: string | undefined;
   let email: string | undefined;
-  if (!fields?.length) return {};
-  for (const f of fields) {
-    const code = (f.field_code ?? f.field_name ?? "").toUpperCase();
+  for (const f of fields ?? []) {
+    const code = `${f.field_code ?? ""} ${f.field_name ?? ""}`.toUpperCase();
     const v = f.values?.[0]?.value;
-    const str = v == null ? "" : String(v);
-    if (!str) continue;
-    if (code.includes("PHONE")) phone = str;
-    if (code.includes("EMAIL")) email = str;
+    if (v == null || String(v).trim() === "") continue;
+    if (!phone && code.includes("PHONE")) phone = String(v);
+    if (!email && code.includes("EMAIL")) email = String(v);
   }
   return { phone, email };
 }
@@ -76,26 +78,39 @@ function pickContactPhoneEmail(lead: AmoLead): { phone?: string; email?: string 
 
   const contacts = lead._embedded?.contacts ?? [];
   for (const c of contacts) {
-    const cf = c.custom_fields_values ?? [];
-    let phone: string | undefined;
-    let email: string | undefined;
-    for (const f of cf) {
-      const code = (f.field_code ?? f.field_name ?? "").toUpperCase();
-      const v = f.values?.[0]?.value;
-      const str = v == null ? "" : String(v);
-      if (!str) continue;
-      if (code.includes("PHONE") || code === "PHONE") phone = str;
-      if (code.includes("EMAIL") || code === "EMAIL") email = str;
-    }
+    const { phone, email } = pickPhoneEmailFromFields(c.custom_fields_values);
     if (phone || email) return { phone, email };
   }
   return {};
 }
 
-/**
- * Маппинг лида AmoCRM → унифицированная модель.
- * `lossReasonById` — подписи причин отказа; `pipelines` — для type этапа (успех/провал).
- */
+export function mapAmoLead(lead: AmoLead, pipelineName?: string) {
+  const utm = extractAmoUTM(lead);
+  return {
+    externalId: String(lead.id),
+    crmType: "amocrm" as const,
+    name: lead.name || `Сделка #${lead.id}`,
+    status: amoLeadIsWon(lead)
+      ? "won"
+      : amoLeadIsLost(lead)
+        ? "lost"
+        : "progress",
+    amount: lead.price || 0,
+    externalManagerId: String(lead.responsible_user_id),
+    pipelineId: String(lead.pipeline_id),
+    pipelineName: pipelineName ?? lead._embedded?.pipeline?.name,
+    stageId: String(lead.status_id),
+    failReasonId: lead.loss_reason_id ? String(lead.loss_reason_id) : null,
+    utmSource: utm.source,
+    utmMedium: utm.medium,
+    utmCampaign: utm.campaign,
+    utmContent: utm.content,
+    createdAt: new Date(lead.created_at * 1000),
+    closedAt: lead.closed_at ? new Date(lead.closed_at * 1000) : null,
+    updatedAt: new Date(lead.updated_at * 1000),
+  };
+}
+
 export function mapAmoLeadToUnified(
   lead: AmoLead,
   ctx: {
@@ -103,26 +118,18 @@ export function mapAmoLeadToUnified(
     lossReasonById: Map<number, string>;
   },
 ): UnifiedLead {
-  const idx = buildStatusIndex(ctx.pipelines);
-  const stType = getStatusType(lead.pipeline_id, lead.status_id, idx);
-
-  let status: string;
-  if (stType === 1) {
-    status = "won";
-  } else if (stType === 2 || lead.loss_reason_id) {
-    status = "lost";
-  } else if (lead.status_id === AMO_FALLBACK_LOST_STATUS_ID) {
-    status = "lost";
-  } else {
-    status = "in_progress";
-  }
+  const status = amoLeadIsWon(lead)
+    ? "won"
+    : amoLeadIsLost(lead)
+      ? "lost"
+      : "in_progress";
 
   const lossName = lead.loss_reason_id
     ? ctx.lossReasonById.get(lead.loss_reason_id)
     : undefined;
   const embeddedLoss = lead._embedded?.loss_reason?.[0]?.name;
 
-  const utm = extractUtmFromCustomFields(lead.custom_fields_values);
+  const utm = extractAmoUTM(lead);
   const { phone, email } = pickContactPhoneEmail(lead);
 
   const createdAt = new Date(lead.created_at * 1000);
@@ -131,10 +138,7 @@ export function mapAmoLeadToUnified(
       ? new Date(lead.closed_at * 1000)
       : undefined;
 
-  const source =
-    utm.utmSource?.trim() ||
-    utm.utmCampaign?.trim() ||
-    "amocrm";
+  const source = utm.source?.trim() || utm.campaign?.trim() || "amocrm";
 
   return {
     externalId: String(lead.id),
@@ -142,14 +146,15 @@ export function mapAmoLeadToUnified(
     phone: phone ?? null,
     email: email ?? null,
     source,
-    utmSource: utm.utmSource ?? null,
-    utmMedium: utm.utmMedium ?? null,
-    utmCampaign: utm.utmCampaign ?? null,
-    utmContent: utm.utmContent ?? null,
-    gclid: utm.gclid ?? null,
-    fbclid: utm.fbclid ?? null,
+    utmSource: utm.source ?? null,
+    utmMedium: utm.medium ?? null,
+    utmCampaign: utm.campaign ?? null,
+    utmContent: utm.content ?? null,
+    gclid: null,
+    fbclid: null,
     managerExternalId: String(lead.responsible_user_id),
     status,
+    stageExternalId: String(lead.status_id),
     amount: typeof lead.price === "number" ? lead.price : 0,
     failReason: lossName ?? embeddedLoss ?? null,
     createdAt,

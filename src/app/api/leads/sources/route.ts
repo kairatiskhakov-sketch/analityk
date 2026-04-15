@@ -39,8 +39,9 @@ export async function GET(req: Request) {
     const grouped = new Map<string, { total: number; won: number; lost: number }>();
     for (const l of leads) {
       if (filters.pipelineId && String((l as { CATEGORY_ID?: string }).CATEGORY_ID ?? "") !== filters.pipelineId) continue;
-      const raw = String(l.SOURCE_ID ?? "");
-      const source = sourceMap.get(raw) ?? (raw || "Без источника");
+      const raw = String(l.SOURCE_ID ?? "").trim();
+      if (!raw) continue;
+      const source = sourceMap.get(raw) ?? raw;
       const cur = grouped.get(source) ?? { total: 0, won: 0, lost: 0 };
       cur.total += 1;
       if (leadIsWon(l)) cur.won += 1;

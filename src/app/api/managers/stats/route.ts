@@ -1,15 +1,16 @@
 import {
+  BITRIX_LOSS_REASON_FIELD,
   dealIsLost,
   dealIsWon,
-  leadIsLost,
   parseOpportunity,
   type BitrixDeal,
   type BitrixLead,
 } from "@/lib/bitrix/api";
+import { resolveBitrixSourceLabel } from "@/lib/bitrix/bitrix-labels";
 import {
+  fetchDealUserfieldDictCached,
   fetchDealsCached,
   fetchLeadsCached,
-  fetchLostReasonsCached,
   fetchManagersCached,
   fetchPipelinesCached,
   fetchSourcesCatalogCached,
@@ -74,14 +75,14 @@ export async function GET(req: Request) {
 
     try {
       const { prevFrom, prevTo } = getPreviousRange(dateFrom, dateTo);
-      const [wonStageIds, leads, deals, prevDeals, managers, sourceCat, failCat, pipelines, dbManagers, planRows] = await Promise.all([
+      const [wonStageIds, leads, deals, prevDeals, managers, sourceCat, lossReasonUfDict, pipelines, dbManagers, planRows] = await Promise.all([
         getOrSyncWonStageIds(url),
         fetchLeadsCached(url, dateFrom, dateTo, managerIds.length ? managerIds : undefined),
         fetchDealsCached(url, dateFrom, dateTo, managerIds.length ? managerIds : undefined, pipelineId),
         fetchDealsCached(url, prevFrom, prevTo, managerIds.length ? managerIds : undefined, pipelineId),
         fetchManagersCached(url),
         fetchSourcesCatalogCached(url),
-        fetchLostReasonsCached(url),
+        fetchDealUserfieldDictCached(url, BITRIX_LOSS_REASON_FIELD),
         fetchPipelinesCached(url),
         prisma.manager.findMany({ where: { crmType: "bitrix24", isActive: true }, select: { id: true, externalId: true, name: true } }),
         prisma.planTarget.findMany({
@@ -94,7 +95,6 @@ export async function GET(req: Request) {
       ]);
 
       const sourceMap = new Map(sourceCat.map((x) => [x.id, x.name]));
-      const failMap = new Map(failCat.map((x) => [x.id, x.name]));
       const managerNameByExt = new Map(managers.map((m) => [m.id, m.name]));
       const dbByExt = new Map(dbManagers.map((m) => [m.externalId, m]));
       const planByManagerId = new Map(planRows.filter((x) => x.managerId).map((x) => [x.managerId!, x.target]));
@@ -158,13 +158,24 @@ export async function GET(req: Request) {
           .filter((n): n is number => n != null);
         const avgCloseDays = closeDays.length ? Math.round(closeDays.reduce((s, x) => s + x, 0) / closeDays.length) : 0;
 
+        const allDeals = [...agg.wonDeals, ...agg.lostDeals, ...agg.activeDeals];
         const topSources = groupTop(
-          agg.leads.map((l) => sourceMap.get(String(l.SOURCE_ID ?? "")) ?? `Источник ${String(l.SOURCE_ID ?? "unknown")}`),
+          allDeals
+            .filter((d) => (d.SOURCE_ID ?? "").toString().trim() !== "")
+            .map((d) => resolveBitrixSourceLabel(d.SOURCE_ID, sourceMap)),
         );
         const topFailReasons = groupTop(
-          agg.leads
-            .filter((l) => leadIsLost(l))
-            .map((l) => failMap.get(String(l.LOST_REASON_ID ?? "")) ?? `Причина ${String(l.LOST_REASON_ID ?? "unknown")}`),
+          agg.lostDeals
+            .map((d) => {
+              const uf = String(
+                (d as unknown as Record<string, unknown>)[BITRIX_LOSS_REASON_FIELD] ?? "",
+              ).trim();
+              if (uf && uf !== "0") {
+                return lossReasonUfDict.get(uf) ?? `Причина ${uf}`;
+              }
+              const lr = String(d.LOSS_REASON_ID ?? "").trim();
+              return lr ? `Причина ${lr}` : "Не указана";
+            }),
         );
 
         const byPipelineMap = new Map<string, { deals: number; amount: number }>();

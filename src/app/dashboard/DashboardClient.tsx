@@ -235,7 +235,9 @@ export function DashboardClient({
     };
   }, [sp]);
 
-  const failPie = fails.map((x) => ({ name: x.reason, value: x.count }));
+  const failPie = overview?.failReasons?.length
+    ? overview.failReasons.map((x) => ({ name: x.name, value: x.count }))
+    : fails.map((x) => ({ name: x.reason, value: x.count }));
   const srcPie = overview?.sources?.map((x) => ({ name: x.name, value: x.count })) ?? [];
   const totalLeads = overview?.leads.total ?? 0;
   const totalClosed = overview?.deals.won.count ?? 0;
@@ -522,7 +524,7 @@ export function DashboardClient({
               <Card className="module-enter min-w-0">
                 <CardHeader
                   title={`Причины отказа (${failPie.reduce((s, x) => s + x.value, 0)})`}
-                  sub={failsSource === "deals" ? "по стадиям сделок" : "из CRM"}
+                  sub="из CRM"
                 />
                 <div className="flex flex-col items-center px-4 pb-4">
                   {failsWarning ? (

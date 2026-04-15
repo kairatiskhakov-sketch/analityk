@@ -82,7 +82,7 @@ export async function fetchDealsCached(
         categoryId: cat || undefined,
       });
     },
-    ["bitrix-deals", webhookUrl, dateFrom, dateTo, mk, cat],
+    ["bitrix-deals-v2-uf", webhookUrl, dateFrom, dateTo, mk, cat],
     { revalidate: REVALIDATE },
   );
   return run();

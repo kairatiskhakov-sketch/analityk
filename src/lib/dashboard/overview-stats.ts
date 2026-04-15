@@ -193,8 +193,12 @@ export async function getDashboardOverview(
     }),
   );
 
+  // Учитываем только сделки с заполненным SOURCE_ID (у ~97% сделок портала он пуст —
+  // это не «Другое», а отсутствие источника)
   const srcRaw = new Map<string, number>();
   for (const d of scopedDeals) {
+    const raw = (d.SOURCE_ID ?? "").toString().trim();
+    if (!raw) continue;
     const label = resolveBitrixSourceLabel(d.SOURCE_ID, srcMap);
     srcRaw.set(label, (srcRaw.get(label) ?? 0) + 1);
   }

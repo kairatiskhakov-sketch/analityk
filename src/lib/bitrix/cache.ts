@@ -130,6 +130,23 @@ export async function fetchLostReasonsCached(
   return run();
 }
 
+export async function fetchDealUserfieldDictCached(
+  webhookUrl: string,
+  fieldName: string,
+): Promise<Map<string, string>> {
+  const run = unstable_cache(
+    async () => {
+      const api = new BitrixAPI(webhookUrl);
+      const dict = await api.getDealUserfieldDict(fieldName);
+      return Array.from(dict.entries());
+    },
+    ["bitrix-deal-uf-dict", webhookUrl, fieldName],
+    { revalidate: REVALIDATE },
+  );
+  const entries = await run();
+  return new Map(entries);
+}
+
 export async function fetchSourcesCatalogCached(
   webhookUrl: string,
 ): Promise<Awaited<ReturnType<BitrixAPI["getSources"]>>> {

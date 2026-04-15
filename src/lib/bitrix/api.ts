@@ -83,6 +83,14 @@ const DEFAULT_LEAD_SELECT = [
   "CATEGORY_ID",
 ] as const;
 
+/**
+ * UF-поле сделки, которое хранит причину отказа (enumeration).
+ * Портал higroup.bitrix24.kz использует UF_CRM_1679040517519.
+ * Задаётся через env BITRIX_LOSS_REASON_FIELD для других порталов.
+ */
+export const BITRIX_LOSS_REASON_FIELD =
+  process.env.BITRIX_LOSS_REASON_FIELD?.trim() || "UF_CRM_1679040517519";
+
 const DEFAULT_DEAL_SELECT = [
   "ID",
   "TITLE",
@@ -97,7 +105,8 @@ const DEFAULT_DEAL_SELECT = [
   "PROBABILITY",
   "SOURCE_ID",
   "LOSS_REASON_ID",
-] as const;
+  BITRIX_LOSS_REASON_FIELD,
+];
 
 /** Узкий select для плана/факта — меньше трафика и быстрее ответ Bitrix. */
 export const PLAN_FACT_DEAL_SELECT = [
@@ -356,6 +365,23 @@ export class BitrixAPI {
         name,
         email: u.EMAIL ?? undefined,
       });
+    }
+    return out;
+  }
+
+  /**
+   * Словарь значений UF-поля сделки (enumeration).
+   * Возвращает Map<id, label>.
+   */
+  async getDealUserfieldDict(fieldName: string): Promise<Map<string, string>> {
+    const res = await this.call<
+      { FIELD_NAME?: string; LIST?: { ID?: string | number; VALUE?: string }[] }[]
+    >("crm.deal.userfield.list", {});
+    const field = (res.result ?? []).find((f) => f.FIELD_NAME === fieldName);
+    const out = new Map<string, string>();
+    for (const item of field?.LIST ?? []) {
+      if (item.ID == null) continue;
+      out.set(String(item.ID), String(item.VALUE ?? "").trim() || String(item.ID));
     }
     return out;
   }

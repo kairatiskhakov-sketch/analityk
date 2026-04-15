@@ -1,4 +1,5 @@
 import {
+  BITRIX_LOSS_REASON_FIELD,
   BitrixAPI,
   dealAnalyticsType,
   dealIsLost,
@@ -11,6 +12,7 @@ import {
   type BitrixDeal,
 } from "@/lib/bitrix/api";
 import {
+  fetchDealUserfieldDictCached,
   fetchDealsCached,
   fetchLeadsCached,
   fetchLostReasonsCached,
@@ -91,29 +93,33 @@ export async function getDashboardOverview(
   await ensureBitrixLeadDictionaries(webhookUrl);
 
   const api = new BitrixAPI(webhookUrl);
-  const [wonStageIds, stageConfigs, leads, wonLeadsByCloseDate, deals, pipelines, lostCat, srcCat] =
-    await Promise.all([
-      getOrSyncWonStageIds(webhookUrl),
-      getStageConfigs(),
-      fetchLeadsCached(webhookUrl, dateFrom, dateTo, mids),
-      api.getLeads({
-        dateFrom,
-        dateTo,
-        managerIds: mids,
-        dateField: "DATE_CLOSED",
-        statusSemanticId: "S",
-      }),
-      fetchDealsCached(
-        webhookUrl,
-        dateFrom,
-        dateTo,
-        mids,
-        filters.pipelineId,
-      ),
-      fetchPipelinesCached(webhookUrl),
-      fetchLostReasonsCached(webhookUrl),
-      fetchSourcesCatalogCached(webhookUrl),
-    ]);
+  const [
+    wonStageIds,
+    stageConfigs,
+    leads,
+    wonLeadsByCloseDate,
+    deals,
+    pipelines,
+    lostCat,
+    srcCat,
+    lossReasonUfDict,
+  ] = await Promise.all([
+    getOrSyncWonStageIds(webhookUrl),
+    getStageConfigs(),
+    fetchLeadsCached(webhookUrl, dateFrom, dateTo, mids),
+    api.getLeads({
+      dateFrom,
+      dateTo,
+      managerIds: mids,
+      dateField: "DATE_CLOSED",
+      statusSemanticId: "S",
+    }),
+    fetchDealsCached(webhookUrl, dateFrom, dateTo, mids, filters.pipelineId),
+    fetchPipelinesCached(webhookUrl),
+    fetchLostReasonsCached(webhookUrl),
+    fetchSourcesCatalogCached(webhookUrl),
+    fetchDealUserfieldDictCached(webhookUrl, BITRIX_LOSS_REASON_FIELD),
+  ]);
 
   const { lostMap, srcMap } = await mergeBitrixDictionaryMaps(
     new Map(lostCat.map((x) => [String(x.id).toUpperCase(), x.name])),
@@ -152,22 +158,39 @@ export async function getDashboardOverview(
     )
     .reduce((s, d) => s + parseOpportunity(d.OPPORTUNITY), 0);
 
-  // Источники и причины отказа — из сделок (кастомные источники типа Whatsapp, Таргет и т.д.)
+  // Причины отказа — приоритет: кастомное UF-поле → LOSS_REASON_ID → "Не указана"
   const failRaw = new Map<string, number>();
   for (const d of scopedDeals) {
     if (d.STAGE_SEMANTIC_ID !== "F") continue;
+    const ufRaw = String(
+      (d as unknown as Record<string, unknown>)[BITRIX_LOSS_REASON_FIELD] ?? "",
+    ).trim();
+    if (ufRaw && ufRaw !== "0") {
+      const key = `uf:${ufRaw}`;
+      failRaw.set(key, (failRaw.get(key) ?? 0) + 1);
+      continue;
+    }
     const raw = (d.LOSS_REASON_ID ?? "").toString().trim();
-    const rid = raw || "unknown";
-    failRaw.set(rid, (failRaw.get(rid) ?? 0) + 1);
+    const key = raw ? `lr:${raw}` : "unknown";
+    failRaw.set(key, (failRaw.get(key) ?? 0) + 1);
   }
   const failReasons = topSevenPlusOther(
-    Array.from(failRaw.entries()).map(([id, count]) => ({
-      name:
-        id === "unknown"
-          ? "Не указана"
-          : (lostMap.get(id.toUpperCase()) ?? lostMap.get(id) ?? `Причина ${id}`),
-      count,
-    })),
+    Array.from(failRaw.entries()).map(([key, count]) => {
+      if (key === "unknown") return { name: "Не указана", count };
+      if (key.startsWith("uf:")) {
+        const id = key.slice(3);
+        return {
+          name: lossReasonUfDict.get(id) ?? `Причина ${id}`,
+          count,
+        };
+      }
+      const id = key.slice(3);
+      return {
+        name:
+          lostMap.get(id.toUpperCase()) ?? lostMap.get(id) ?? `Причина ${id}`,
+        count,
+      };
+    }),
   );
 
   const srcRaw = new Map<string, number>();

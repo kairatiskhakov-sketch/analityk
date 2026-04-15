@@ -24,7 +24,15 @@ yarn-error.log*
 
 # local env files
 .env
-.env*.local
+.env*
+!.env.example
+
+# ai tooling / local state
+.claude/
+.claude-flow/
+.swarm/
+.mcp.json
+CLAUDE.md
 
 # vercel
 .vercel

@@ -35,6 +35,8 @@ export type BitrixDeal = {
   CLOSED?: string;
   CLOSEDATE?: string;
   PROBABILITY?: string | number;
+  SOURCE_ID?: string;
+  LOSS_REASON_ID?: string;
 };
 
 export type BitrixManager = {
@@ -93,6 +95,8 @@ const DEFAULT_DEAL_SELECT = [
   "DATE_CREATE",
   "CLOSED",
   "PROBABILITY",
+  "SOURCE_ID",
+  "LOSS_REASON_ID",
 ] as const;
 
 /** Узкий select для плана/факта — меньше трафика и быстрее ответ Bitrix. */

@@ -152,10 +152,11 @@ export async function getDashboardOverview(
     )
     .reduce((s, d) => s + parseOpportunity(d.OPPORTUNITY), 0);
 
+  // Источники и причины отказа — из сделок (кастомные источники типа Whatsapp, Таргет и т.д.)
   const failRaw = new Map<string, number>();
-  for (const l of scopedLeads) {
-    if (!leadIsLost(l)) continue;
-    const raw = (l.LOST_REASON_ID ?? "").toString().trim();
+  for (const d of scopedDeals) {
+    if (d.STAGE_SEMANTIC_ID !== "F") continue;
+    const raw = (d.LOSS_REASON_ID ?? "").toString().trim();
     const rid = raw || "unknown";
     failRaw.set(rid, (failRaw.get(rid) ?? 0) + 1);
   }
@@ -164,14 +165,14 @@ export async function getDashboardOverview(
       name:
         id === "unknown"
           ? "Не указана"
-          : (lostMap.get(id) ?? `Причина ${id}`),
+          : (lostMap.get(id.toUpperCase()) ?? lostMap.get(id) ?? `Причина ${id}`),
       count,
     })),
   );
 
   const srcRaw = new Map<string, number>();
-  for (const l of scopedLeads) {
-    const label = resolveBitrixSourceLabel(l.SOURCE_ID, srcMap);
+  for (const d of scopedDeals) {
+    const label = resolveBitrixSourceLabel(d.SOURCE_ID, srcMap);
     srcRaw.set(label, (srcRaw.get(label) ?? 0) + 1);
   }
   const sources = topSevenPlusOther(

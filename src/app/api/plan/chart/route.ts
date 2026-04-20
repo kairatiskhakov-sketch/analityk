@@ -51,7 +51,15 @@ export async function GET(req: Request) {
     const [wonStageIds, stageConfigs, deals] = await Promise.all([
       getOrSyncWonStageIds(url),
       getStageConfigs(),
-      fetchDealsMergedByChunks(url, df, dt, PLAN_FACT_DEAL_SELECT, pipelineId),
+      fetchDealsMergedByChunks(
+        url,
+        df,
+        dt,
+        PLAN_FACT_DEAL_SELECT,
+        pipelineId,
+        undefined,
+        "DATE_CREATE",
+      ),
     ]);
     const series = buildPlanVsFactSeries(
       deals,

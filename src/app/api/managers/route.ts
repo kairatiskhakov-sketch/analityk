@@ -1,15 +1,10 @@
-import {
-  dealAnalyticsType,
-  dealIsWon,
-  getStageConfigs,
-  parseOpportunity,
-} from "@/lib/bitrix/api";
-import { fetchDealsCached, fetchManagersCached } from "@/lib/bitrix/cache";
+import { parseOpportunity } from "@/lib/bitrix/api";
+import { fetchManagersCached } from "@/lib/bitrix/cache";
 import {
   getActiveBitrixConnection,
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
-import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
+import { fetchNewSalesForPeriod } from "@/lib/bitrix/stage-history-sales";
 import { parseManagerIdsFromSearchParams } from "@/lib/dashboard/dashboard-query";
 import { parseDashboardRangeFromSearchParams } from "@/lib/dashboard/range";
 import { jsonError, jsonOk } from "@/lib/http/json";
@@ -37,20 +32,13 @@ export async function GET(req: Request) {
       return jsonOk({ ranking: [] });
     }
 
-    const [wonStageIds, stageConfigs, deals] = await Promise.all([
-      getOrSyncWonStageIds(url),
-      getStageConfigs(),
-      fetchDealsCached(url, ymd(start), ymd(end), managerIds, pipelineId),
+    const [sales, managers] = await Promise.all([
+      fetchNewSalesForPeriod(url, ymd(start), ymd(end)),
+      fetchManagersCached(url),
     ]);
-    const scopedDeals = stageSet
-      ? deals.filter((d) => stageSet.has(String(d.STAGE_ID ?? "")))
-      : deals;
-    const won = scopedDeals.filter((d) =>
-      stageConfigs.length > 0
-        ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
-        : dealIsWon(d, wonStageIds),
-    );
-    const managers = await fetchManagersCached(url);
+    const won = stageSet
+      ? sales.wonDeals.filter((d) => stageSet.has(String(d.STAGE_ID ?? "")))
+      : sales.wonDeals;
     const nameById = new Map(managers.map((m) => [m.id, m.name]));
 
     const map = new Map<

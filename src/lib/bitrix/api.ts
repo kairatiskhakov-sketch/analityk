@@ -151,6 +151,31 @@ export class BitrixAPI {
     return data;
   }
 
+  /**
+   * Batch-запрос: до 50 методов за один HTTP-вызов.
+   * Возвращает результаты в том же порядке, что и входной массив.
+   * https://apidocs.bitrix24.ru/api-reference/common/batch.html
+   */
+  async batch<T = unknown>(
+    calls: { method: string; params?: Record<string, unknown> }[],
+  ): Promise<(T | null)[]> {
+    if (calls.length === 0) return [];
+    const cmds: Record<string, string> = {};
+    const cmdParams: Record<string, Record<string, unknown>> = {};
+    calls.forEach((c, i) => {
+      cmds[`cmd${i}`] = c.method;
+      if (c.params && Object.keys(c.params).length > 0) {
+        cmdParams[`cmd${i}`] = c.params;
+      }
+    });
+    const res = await this.call<{ result: Record<string, T>; result_error: Record<string, string> }>(
+      "batch",
+      { cmd: cmds, ...Object.fromEntries(Object.entries(cmdParams).map(([k, v]) => [`params[${k}]`, v])) },
+    );
+    const resultMap = (res.result as unknown as { result: Record<string, T> })?.result ?? {};
+    return calls.map((_, i) => resultMap[`cmd${i}`] ?? null);
+  }
+
   /** Собрать все страницы по полю `next` */
   private async listAllPages<T>(
     method: string,
@@ -229,37 +254,130 @@ export class BitrixAPI {
   }
 
   async getDeals(params: {
-    dateFrom: string;
-    dateTo: string;
+    dateFrom?: string;
+    dateTo?: string;
     managerId?: string;
     managerIds?: string[];
     categoryId?: string;
     stageIds?: string[];
+    ids?: string[];
     select?: string[];
+    /** Поле даты для фильтра. Может быть стандартное (DATE_CREATE, CLOSEDATE)
+     *  или UF-поле (UF_CRM_...). */
+    dateField?: string;
   }): Promise<BitrixDeal[]> {
     const select = params.select ?? [...DEFAULT_DEAL_SELECT];
-    const filter: Record<string, unknown> = {
-      ">=DATE_CREATE": `${params.dateFrom}T00:00:00`,
-      "<=DATE_CREATE": `${params.dateTo}T23:59:59`,
-    };
+    const dateField = params.dateField ?? "DATE_CREATE";
+    const baseFilter: Record<string, unknown> = {};
+    if (params.dateFrom) {
+      baseFilter[`>=${dateField}`] = `${params.dateFrom}T00:00:00`;
+    }
+    if (params.dateTo) {
+      baseFilter[`<=${dateField}`] = `${params.dateTo}T23:59:59`;
+    }
     if (params.categoryId !== undefined && params.categoryId !== "") {
       const cid = String(params.categoryId);
       // Основная воронка Bitrix24 — CATEGORY_ID = 0 (число)
-      filter.CATEGORY_ID = cid === "0" ? 0 : cid;
+      baseFilter.CATEGORY_ID = cid === "0" ? 0 : cid;
     }
     if (params.stageIds?.length) {
-      filter.STAGE_ID = params.stageIds;
+      baseFilter.STAGE_ID = params.stageIds;
     }
     if (params.managerIds?.length) {
-      filter.ASSIGNED_BY_ID = params.managerIds;
+      baseFilter.ASSIGNED_BY_ID = params.managerIds;
     } else if (params.managerId) {
-      filter.ASSIGNED_BY_ID = params.managerId;
+      baseFilter.ASSIGNED_BY_ID = params.managerId;
     }
+
+    // Если передан явный список ID — режем по 50 (URL/JSON safety) и
+    // делаем по одному запросу на чанк.
+    if (params.ids?.length) {
+      const out: BitrixDeal[] = [];
+      const chunkSize = 50;
+      for (let i = 0; i < params.ids.length; i += chunkSize) {
+        const chunk = params.ids.slice(i, i + chunkSize);
+        const filter = { ...baseFilter, ID: chunk };
+        const rows = await this.listAllPages<BitrixDeal>("crm.deal.list", {
+          select,
+          filter,
+          order: { ID: "DESC" },
+        });
+        out.push(...rows);
+      }
+      return out;
+    }
+
     return this.listAllPages<BitrixDeal>("crm.deal.list", {
       select,
-      filter,
-      order: { DATE_CREATE: "DESC" },
+      filter: baseFilter,
+      order: { ID: "DESC" },
     });
+  }
+
+  /**
+   * История переходов по стадиям. entityTypeId: 2 = сделка, 1 = лид.
+   * Возвращает события "сделка попала в стадию X в момент CREATED_TIME".
+   *
+   * Внимание: crm.stagehistory.list возвращает result в форме { items: [...] },
+   * в отличие от crm.deal.list (просто массив). Поэтому листаем вручную.
+   *
+   * Поддерживается фильтр по списку OWNER_ID (чанками по 50, чтобы не
+   * упереться в лимит длины запроса).
+   */
+  async getStageHistoryEntries(params: {
+    entityTypeId: number;
+    dateFrom?: string;
+    dateTo?: string;
+    /** Жёсткое строгое неравенство `<CREATED_TIME` — для запроса событий ДО периода. */
+    dateBefore?: string;
+    stageIds?: string[];
+    ownerIds?: string[];
+  }): Promise<{ OWNER_ID: string; STAGE_ID: string; CREATED_TIME: string }[]> {
+    const baseFilter: Record<string, unknown> = {};
+    if (params.dateFrom) {
+      baseFilter[">=CREATED_TIME"] = `${params.dateFrom}T00:00:00`;
+    }
+    if (params.dateTo) {
+      baseFilter["<=CREATED_TIME"] = `${params.dateTo}T23:59:59`;
+    }
+    if (params.dateBefore) {
+      baseFilter["<CREATED_TIME"] = `${params.dateBefore}T00:00:00`;
+    }
+    if (params.stageIds?.length) {
+      baseFilter.STAGE_ID = params.stageIds;
+    }
+
+    type Entry = { OWNER_ID: string; STAGE_ID: string; CREATED_TIME: string };
+
+    const fetchOnce = async (filter: Record<string, unknown>): Promise<Entry[]> => {
+      const out: Entry[] = [];
+      let start = 0;
+      for (let page = 0; page < 200; page++) {
+        const res = await this.call<{ items: Entry[] }>("crm.stagehistory.list", {
+          entityTypeId: params.entityTypeId,
+          select: ["OWNER_ID", "STAGE_ID", "CREATED_TIME"],
+          filter,
+          order: { CREATED_TIME: "DESC" },
+          start,
+        });
+        const items = res.result?.items ?? [];
+        out.push(...items);
+        if (res.next === undefined || res.next === null) break;
+        start = res.next;
+      }
+      return out;
+    };
+
+    if (params.ownerIds?.length) {
+      const out: Entry[] = [];
+      const chunkSize = 50;
+      for (let i = 0; i < params.ownerIds.length; i += chunkSize) {
+        const chunk = params.ownerIds.slice(i, i + chunkSize);
+        out.push(...(await fetchOnce({ ...baseFilter, OWNER_ID: chunk })));
+      }
+      return out;
+    }
+    return fetchOnce(baseFilter);
   }
 
   /**
@@ -282,7 +400,6 @@ export class BitrixAPI {
         ? `${pipelineLabel} · ${rawName}`
         : rawName;
       out.push({ id, name });
-      console.log("Won stage found:", pipelineLabel ?? "", id, rawName);
     };
 
     let mainRes = await this.call<
@@ -316,27 +433,25 @@ export class BitrixAPI {
       { ID?: string | number; NAME?: string }[]
     >("crm.dealcategory.list", {});
     const rawCats = Array.isArray(catRes.result) ? catRes.result : [];
-    for (const pipeline of rawCats) {
-      const pid = pipeline.ID != null ? String(pipeline.ID) : "";
-      if (!pid || pid === "0") continue;
-      let stRes = await this.call<{ STATUS_ID?: string; NAME?: string; SEMANTICS?: string; EXTRA?: { SEMANTICS?: string } }[]>(
-        "crm.status.list",
-        { filter: { ENTITY_ID: `DEAL_STAGE_${pid}` } },
-      );
-      let rows = stRes.result ?? [];
-      if (rows.length === 0) {
-        stRes = await this.call<{ STATUS_ID?: string; NAME?: string; SEMANTICS?: string; EXTRA?: { SEMANTICS?: string } }[]>(
-          "crm.status.list",
-          { filter: { ENTITY_ID: "DEAL_STAGE", CATEGORY_ID: pid } },
-        );
-        rows = stRes.result ?? [];
-      }
-      const plName =
-        (pipeline.NAME && String(pipeline.NAME).trim()) || pid;
-      for (const stage of rows) {
-        const semantics = (stage.EXTRA?.SEMANTICS ?? stage.SEMANTICS ?? "").toLowerCase();
-        if (semantics === "success" || semantics === "s") {
-          pushIf(stage.STATUS_ID, stage.NAME ?? "", plName);
+    const otherCats = rawCats.filter((c) => String(c.ID ?? "") !== "0" && c.ID != null);
+
+    if (otherCats.length > 0) {
+      type StageRow = { STATUS_ID?: string; NAME?: string; SEMANTICS?: string; EXTRA?: { SEMANTICS?: string } };
+      const batchCalls = otherCats.map((cat) => ({
+        method: "crm.status.list",
+        params: { filter: { ENTITY_ID: `DEAL_STAGE_${String(cat.ID)}` } },
+      }));
+      const batchResults = await this.batch<StageRow[]>(batchCalls);
+      for (let i = 0; i < otherCats.length; i++) {
+        const cat = otherCats[i];
+        const pid = String(cat.ID);
+        const plName = (cat.NAME && String(cat.NAME).trim()) || pid;
+        const rows = batchResults[i] ?? [];
+        for (const stage of rows) {
+          const semantics = (stage.EXTRA?.SEMANTICS ?? stage.SEMANTICS ?? "").toLowerCase();
+          if (semantics === "success" || semantics === "s") {
+            pushIf(stage.STATUS_ID, stage.NAME ?? "", plName);
+          }
         }
       }
     }
@@ -376,7 +491,7 @@ export class BitrixAPI {
   async getDealUserfieldDict(fieldName: string): Promise<Map<string, string>> {
     const res = await this.call<
       { FIELD_NAME?: string; LIST?: { ID?: string | number; VALUE?: string }[] }[]
-    >("crm.deal.userfield.list", {});
+    >("crm.deal.userfield.list", { filter: { FIELD_NAME: fieldName } });
     const field = (res.result ?? []).find((f) => f.FIELD_NAME === fieldName);
     const out = new Map<string, string>();
     for (const item of field?.LIST ?? []) {

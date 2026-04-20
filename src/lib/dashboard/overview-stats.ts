@@ -1,13 +1,6 @@
 import {
   BITRIX_LOSS_REASON_FIELD,
-  BitrixAPI,
-  dealAnalyticsType,
   dealIsLost,
-  dealIsProgress,
-  dealIsWon,
-  getStageConfigs,
-  leadIsLost,
-  leadIsWon,
   parseOpportunity,
   type BitrixDeal,
 } from "@/lib/bitrix/api";
@@ -28,7 +21,7 @@ import {
   getActiveBitrixConnection,
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
-import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
+import { fetchNewSalesForPeriod } from "@/lib/bitrix/stage-history-sales";
 import type { DashboardFilters } from "@/lib/dashboard/dashboard-query";
 
 export type DealFinancialSlice = { count: number; sum: number };
@@ -92,28 +85,17 @@ export async function getDashboardOverview(
 
   await ensureBitrixLeadDictionaries(webhookUrl);
 
-  const api = new BitrixAPI(webhookUrl);
   const [
-    wonStageIds,
-    stageConfigs,
+    sales,
     leads,
-    wonLeadsByCloseDate,
     deals,
     pipelines,
     lostCat,
     srcCat,
     lossReasonUfDict,
   ] = await Promise.all([
-    getOrSyncWonStageIds(webhookUrl),
-    getStageConfigs(),
+    fetchNewSalesForPeriod(webhookUrl, dateFrom, dateTo),
     fetchLeadsCached(webhookUrl, dateFrom, dateTo, mids),
-    api.getLeads({
-      dateFrom,
-      dateTo,
-      managerIds: mids,
-      dateField: "DATE_CLOSED",
-      statusSemanticId: "S",
-    }),
     fetchDealsCached(webhookUrl, dateFrom, dateTo, mids, filters.pipelineId),
     fetchPipelinesCached(webhookUrl),
     fetchLostReasonsCached(webhookUrl),
@@ -121,47 +103,43 @@ export async function getDashboardOverview(
     fetchDealUserfieldDictCached(webhookUrl, BITRIX_LOSS_REASON_FIELD),
   ]);
 
+  // «Лидов получено» = новые входящие обращения за период.
+  // Портал работает в режиме «простой CRM» (crm.settings.mode.get = 2),
+  // лиды автоматически конвертируются в сделки, поэтому источник истины —
+  // crm.deal.list по DATE_CREATE. Это совпадает с тем, что менеджер видит в Bitrix.
+  // Если режим классический (есть отдельные лиды) — берём максимум из двух,
+  // чтобы не потерять реальные лид-сущности.
+  const leadsCount = Math.max(leads.length, deals.length);
+
   const { lostMap, srcMap } = await mergeBitrixDictionaryMaps(
     new Map(lostCat.map((x) => [String(x.id).toUpperCase(), x.name])),
     new Map(srcCat.map((x) => [String(x.id).toUpperCase(), x.name])),
   );
 
-  const scopedLeads = filters.pipelineId
-    ? leads.filter(
-        (l) =>
-          String((l as { CATEGORY_ID?: string }).CATEGORY_ID ?? "") ===
-          filters.pipelineId,
-      )
-    : leads;
-  const scopedWonLeadsByCloseDate = filters.pipelineId
-    ? wonLeadsByCloseDate.filter(
-        (l) =>
-          String((l as { CATEGORY_ID?: string }).CATEGORY_ID ?? "") ===
-          filters.pipelineId,
-      )
-    : wonLeadsByCloseDate;
-
   const scopedDeals = stageFilter
     ? deals.filter((d) => stageFilter.has(String(d.STAGE_ID ?? "")))
     : deals;
-  const wonLeads = scopedWonLeadsByCloseDate.filter(leadIsWon);
-  const lostLeads = scopedLeads.filter(leadIsLost);
-  const leadSalesFromWon = wonLeads.reduce(
-    (s, l) => s + parseOpportunity(l.OPPORTUNITY),
+
+  // Won deals — из stagehistory (первый переход в «Продажа» в периоде)
+  const closedWon = stageFilter
+    ? sales.wonDeals.filter((d) => stageFilter.has(String(d.STAGE_ID ?? "")))
+    : sales.wonDeals;
+  // Lost deals — сделки, созданные в периоде и потерянные
+  const closedLost = scopedDeals.filter(
+    (d) => !sales.wonDealIds.has(String(d.ID ?? "")) && dealIsLost(d),
+  );
+  const closedWonSum = closedWon.reduce(
+    (s, d) => s + parseOpportunity(d.OPPORTUNITY),
     0,
   );
-  const dealWonSum = scopedDeals
-    .filter((d) =>
-      stageConfigs.length > 0
-        ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
-        : dealIsWon(d, wonStageIds),
-    )
-    .reduce((s, d) => s + parseOpportunity(d.OPPORTUNITY), 0);
+  const closedLostSum = closedLost.reduce(
+    (s, d) => s + parseOpportunity(d.OPPORTUNITY),
+    0,
+  );
 
-  // Причины отказа — приоритет: кастомное UF-поле → LOSS_REASON_ID → "Не указана"
+  // Причины отказа
   const failRaw = new Map<string, number>();
-  for (const d of scopedDeals) {
-    if (d.STAGE_SEMANTIC_ID !== "F") continue;
+  for (const d of closedLost) {
     const ufRaw = String(
       (d as unknown as Record<string, unknown>)[BITRIX_LOSS_REASON_FIELD] ?? "",
     ).trim();
@@ -217,36 +195,22 @@ export async function getDashboardOverview(
     general: {
       totalDeals: scopedDeals.length,
       activePipelines,
-      leadsInPeriod: scopedLeads.length,
+      leadsInPeriod: leadsCount,
     },
     leads: {
-      total: scopedLeads.length,
-      won: wonLeads.length,
-      lost: lostLeads.length,
-      salesAmount: leadSalesFromWon + dealWonSum,
+      total: leadsCount,
+      won: closedWon.length,
+      lost: closedLost.length,
+      salesAmount: closedWonSum,
     },
     deals: {
       progress: sliceDeals(
         scopedDeals,
         (d) =>
-          stageConfigs.length > 0
-            ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "progress"
-            : dealIsProgress(d, wonStageIds),
+          !sales.wonDealIds.has(String(d.ID ?? "")) && !dealIsLost(d),
       ),
-      won: sliceDeals(
-        scopedDeals,
-        (d) =>
-          stageConfigs.length > 0
-            ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
-            : dealIsWon(d, wonStageIds),
-      ),
-      lost: sliceDeals(
-        scopedDeals,
-        (d) =>
-          stageConfigs.length > 0
-            ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "lost"
-            : dealIsLost(d),
-      ),
+      won: { count: closedWon.length, sum: closedWonSum },
+      lost: { count: closedLost.length, sum: closedLostSum },
     },
     failReasons,
     sources,

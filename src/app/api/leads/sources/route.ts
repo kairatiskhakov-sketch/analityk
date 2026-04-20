@@ -1,12 +1,16 @@
-import { fetchLeadsCached } from "@/lib/bitrix/cache";
+import {
+  fetchDealsCached,
+  fetchSourcesCatalogCached,
+} from "@/lib/bitrix/cache";
 import {
   getActiveBitrixConnection,
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { parseDashboardFilters } from "@/lib/dashboard/dashboard-query";
-import { leadIsLost, leadIsWon } from "@/lib/bitrix/api";
-import { prisma } from "@/lib/prisma";
+import { dealIsLost, dealIsWon } from "@/lib/bitrix/api";
+import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
+import { resolveBitrixSourceLabel } from "@/lib/bitrix/bitrix-labels";
 
 export const dynamic = "force-dynamic";
 
@@ -25,27 +29,32 @@ export async function GET(req: Request) {
       return jsonOk({ sources: [] });
     }
 
-    const leads = await fetchLeadsCached(
-      url,
-      ymd(filters.start),
-      ymd(filters.end),
-      filters.managerIds,
-    );
-    const rows = await prisma.crmDictionary.findMany({
-      where: { crmType: "bitrix24", entityId: "SOURCE" },
-    });
-    const sourceMap = new Map(rows.map((r) => [r.externalId, r.name]));
+    const [wonStageIds, deals, sourceCat] = await Promise.all([
+      getOrSyncWonStageIds(url),
+      fetchDealsCached(
+        url,
+        ymd(filters.start),
+        ymd(filters.end),
+        filters.managerIds,
+        filters.pipelineId,
+      ),
+      fetchSourcesCatalogCached(url),
+    ]);
+    const sourceMap = new Map(sourceCat.map((s) => [s.id, s.name]));
+
+    const scopedDeals = filters.stageIds?.length
+      ? deals.filter((d) => filters.stageIds!.includes(String(d.STAGE_ID ?? "")))
+      : deals;
 
     const grouped = new Map<string, { total: number; won: number; lost: number }>();
-    for (const l of leads) {
-      if (filters.pipelineId && String((l as { CATEGORY_ID?: string }).CATEGORY_ID ?? "") !== filters.pipelineId) continue;
-      const raw = String(l.SOURCE_ID ?? "").trim();
+    for (const d of scopedDeals) {
+      const raw = String(d.SOURCE_ID ?? "").trim();
       if (!raw) continue;
-      const source = sourceMap.get(raw) ?? raw;
+      const source = resolveBitrixSourceLabel(d.SOURCE_ID, sourceMap);
       const cur = grouped.get(source) ?? { total: 0, won: 0, lost: 0 };
       cur.total += 1;
-      if (leadIsWon(l)) cur.won += 1;
-      if (leadIsLost(l)) cur.lost += 1;
+      if (dealIsWon(d, wonStageIds)) cur.won += 1;
+      else if (dealIsLost(d)) cur.lost += 1;
       grouped.set(source, cur);
     }
 

@@ -1,10 +1,10 @@
-import { dealIsWon, parseOpportunity } from "@/lib/bitrix/api";
-import { fetchDealsCached, fetchManagersCached } from "@/lib/bitrix/cache";
+import { parseOpportunity } from "@/lib/bitrix/api";
+import { fetchManagersCached } from "@/lib/bitrix/cache";
 import {
   getActiveBitrixConnection,
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
-import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
+import { fetchNewSalesForPeriod } from "@/lib/bitrix/stage-history-sales";
 import { jsonError, jsonOk } from "@/lib/http/json";
 
 export const dynamic = "force-dynamic";
@@ -37,18 +37,16 @@ export async function GET(req: Request) {
     if (!url) return jsonOk({ rows: [] });
 
     const { prevFrom, prevTo } = previousRange(dateFrom, dateTo);
-    const [wonStageIds, managers, currDeals, prevDeals] = await Promise.all([
-      getOrSyncWonStageIds(url),
+    const [salesCur, salesPrev, managers] = await Promise.all([
+      fetchNewSalesForPeriod(url, dateFrom, dateTo),
+      fetchNewSalesForPeriod(url, prevFrom, prevTo),
       fetchManagersCached(url),
-      fetchDealsCached(url, dateFrom, dateTo, undefined, pipelineId),
-      fetchDealsCached(url, prevFrom, prevTo, undefined, pipelineId),
     ]);
     const nameById = new Map(managers.map((m) => [m.id, m.name]));
 
     const sumWonByManager = (deals: { ASSIGNED_BY_ID?: string; OPPORTUNITY?: string }[]) => {
       const out = new Map<string, number>();
       for (const d of deals) {
-        if (!dealIsWon(d as never, wonStageIds)) continue;
         const id = String(d.ASSIGNED_BY_ID ?? "");
         if (!id) continue;
         out.set(id, (out.get(id) ?? 0) + parseOpportunity(d.OPPORTUNITY));
@@ -56,8 +54,8 @@ export async function GET(req: Request) {
       return out;
     };
 
-    const cur = sumWonByManager(currDeals);
-    const prev = sumWonByManager(prevDeals);
+    const cur = sumWonByManager(salesCur.wonDeals);
+    const prev = sumWonByManager(salesPrev.wonDeals);
     const ids = new Set<string>([
       ...Array.from(cur.keys()),
       ...Array.from(prev.keys()),

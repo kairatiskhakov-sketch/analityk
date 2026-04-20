@@ -88,6 +88,37 @@ export async function fetchDealsCached(
   return run();
 }
 
+/**
+ * Сделки, закрытые в периоде (фильтр по CLOSEDATE). Используется для
+ * метрик «Сделок закрыто / Сумма продаж / Провалено» — у которых период
+ * означает «когда сделка была завершена», а не «когда создана».
+ */
+export async function fetchDealsClosedCached(
+  webhookUrl: string,
+  dateFrom: string,
+  dateTo: string,
+  managerIds?: string[],
+  categoryId?: string,
+): Promise<BitrixDeal[]> {
+  const mk = managerIds?.length ? [...managerIds].sort().join(",") : "";
+  const cat = categoryId ?? "";
+  const run = unstable_cache(
+    async () => {
+      const api = new BitrixAPI(webhookUrl);
+      return api.getDeals({
+        dateFrom,
+        dateTo,
+        managerIds: mk ? mk.split(",") : undefined,
+        categoryId: cat || undefined,
+        dateField: "CLOSEDATE",
+      });
+    },
+    ["bitrix-deals-closed-v1", webhookUrl, dateFrom, dateTo, mk, cat],
+    { revalidate: REVALIDATE },
+  );
+  return run();
+}
+
 export async function fetchPipelinesCached(
   webhookUrl: string,
 ): Promise<BitrixPipeline[]> {

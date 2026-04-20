@@ -1,7 +1,6 @@
 import {
   BITRIX_LOSS_REASON_FIELD,
   dealIsLost,
-  dealIsWon,
   parseOpportunity,
   type BitrixDeal,
   type BitrixLead,
@@ -19,7 +18,7 @@ import {
   getActiveBitrixConnection,
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
-import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
+import { fetchNewSalesForPeriod } from "@/lib/bitrix/stage-history-sales";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
 
@@ -75,11 +74,24 @@ export async function GET(req: Request) {
 
     try {
       const { prevFrom, prevTo } = getPreviousRange(dateFrom, dateTo);
-      const [wonStageIds, leads, deals, prevDeals, managers, sourceCat, lossReasonUfDict, pipelines, dbManagers, planRows] = await Promise.all([
-        getOrSyncWonStageIds(url),
+      // Параллельно: stagehistory-продажи за текущий и прошлый периоды +
+      // остальные данные (лиды, сделки по DATE_CREATE для active/lost, справочники).
+      const [
+        salesCur,
+        salesPrev,
+        leads,
+        deals,
+        managers,
+        sourceCat,
+        lossReasonUfDict,
+        pipelines,
+        dbManagers,
+        planRows,
+      ] = await Promise.all([
+        fetchNewSalesForPeriod(url, dateFrom, dateTo),
+        fetchNewSalesForPeriod(url, prevFrom, prevTo),
         fetchLeadsCached(url, dateFrom, dateTo, managerIds.length ? managerIds : undefined),
         fetchDealsCached(url, dateFrom, dateTo, managerIds.length ? managerIds : undefined, pipelineId),
-        fetchDealsCached(url, prevFrom, prevTo, managerIds.length ? managerIds : undefined, pipelineId),
         fetchManagersCached(url),
         fetchSourcesCatalogCached(url),
         fetchDealUserfieldDictCached(url, BITRIX_LOSS_REASON_FIELD),
@@ -102,9 +114,6 @@ export async function GET(req: Request) {
       const scopedDeals = pipelineId
         ? deals.filter((d) => String(d.CATEGORY_ID ?? "") === pipelineId)
         : deals;
-      const scopedPrevDeals = pipelineId
-        ? prevDeals.filter((d) => String(d.CATEGORY_ID ?? "") === pipelineId)
-        : prevDeals;
 
       const byManager = new Map<string, {
         leads: BitrixLead[];
@@ -122,20 +131,29 @@ export async function GET(req: Request) {
         if (!id) continue;
         ensure(id).leads.push(l);
       }
+      // Won deals — из stagehistory (первый переход в продажную стадию в периоде)
+      for (const d of salesCur.wonDeals) {
+        const id = String(d.ASSIGNED_BY_ID ?? "");
+        if (!id) continue;
+        if (pipelineId && String(d.CATEGORY_ID ?? "") !== pipelineId) continue;
+        ensure(id).wonDeals.push(d);
+      }
+      // Active/lost — сделки, созданные в периоде, которые НЕ являются продажами
       for (const d of scopedDeals) {
         const id = String(d.ASSIGNED_BY_ID ?? "");
         if (!id) continue;
+        if (salesCur.wonDealIds.has(String(d.ID ?? ""))) continue;
         const x = ensure(id);
-        if (dealIsWon(d, wonStageIds)) x.wonDeals.push(d);
-        else if (dealIsLost(d)) x.lostDeals.push(d);
+        if (dealIsLost(d)) x.lostDeals.push(d);
         else x.activeDeals.push(d);
       }
 
+      // Предыдущий период — суммы продаж для тренда
       const prevWonAmountByManager = new Map<string, number>();
-      for (const d of scopedPrevDeals) {
-        if (!dealIsWon(d, wonStageIds)) continue;
+      for (const d of salesPrev.wonDeals) {
         const id = String(d.ASSIGNED_BY_ID ?? "");
         if (!id) continue;
+        if (pipelineId && String(d.CATEGORY_ID ?? "") !== pipelineId) continue;
         prevWonAmountByManager.set(id, (prevWonAmountByManager.get(id) ?? 0) + parseOpportunity(d.OPPORTUNITY));
       }
 

@@ -98,7 +98,14 @@ export function GlobalFilters({ showPeriod = true, showStages = true }: Props) {
   }
 
   return (
-    <div className="glass rounded-[18px] border p-3" style={{ borderColor: "var(--border)" }}>
+    <div
+      className="glass rounded-[18px] border p-3"
+      style={{
+        borderColor: "var(--border)",
+        position: "relative",
+        zIndex: 50,
+      }}
+    >
       <div className="grid gap-3 lg:grid-cols-4">
         {showPeriod ? (
           <div className="lg:col-span-1">
@@ -175,7 +182,7 @@ export function GlobalFilters({ showPeriod = true, showStages = true }: Props) {
               <div
                 className="absolute mt-1 max-h-72 w-full overflow-auto rounded-[12px] border p-2"
                 style={{
-                  zIndex: 100,
+                  zIndex: 1000,
                   border: "1px solid rgba(255,255,255,0.12)",
                   background: "#1a2236",
                   boxShadow: "0 8px 32px rgba(0,0,0,0.4)",

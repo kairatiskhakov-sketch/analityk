@@ -1,4 +1,5 @@
 import {
+  BitrixAPI,
   dealAnalyticsType,
   dealIsWon,
   getStageConfigs,
@@ -7,7 +8,6 @@ import {
   type BitrixDeal,
 } from "@/lib/bitrix/api";
 import type { StageConfig } from "@prisma/client";
-import { fetchDealsMergedByChunks } from "@/lib/plan/plan-bitrix-deals";
 import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
 import {
   daysInRangeInclusive,
@@ -163,15 +163,24 @@ export async function fetchPlanFactsUncached(
     getStageConfigs(),
   ]);
   const wonStageIds = Array.from(new Set(wonStageIdsRaw)).slice(0, 20);
-  const stageFilterIds = stageIds?.length ? stageIds : wonStageIds;
-  const allDeals = await fetchDealsMergedByChunks(
-    webhookUrl,
+  const configWonIds = stageConfigs
+    .filter((c) => c.type === "won")
+    .map((c) => String(c.externalId));
+  const allWonIds = Array.from(new Set([...wonStageIds, ...configWonIds]));
+  const stageFilterIds = stageIds?.length ? stageIds : allWonIds;
+  // Факт = сделки в «продажных» стадиях с «Датой оплаты» в периоде.
+  // UF_CRM_1762323120703 заполняется менеджерами при фактической оплате —
+  // это самый точный источник даты продажи.
+  const { BITRIX_PAYMENT_DATE_FIELD } = await import("@/lib/bitrix/stage-history-sales");
+  const api = new BitrixAPI(webhookUrl);
+  const allDeals = await api.getDeals({
     dateFrom,
     dateTo,
-    PLAN_FACT_DEAL_SELECT,
+    dateField: BITRIX_PAYMENT_DATE_FIELD,
+    stageIds: stageFilterIds,
+    select: [...PLAN_FACT_DEAL_SELECT, BITRIX_PAYMENT_DATE_FIELD],
     categoryId,
-    stageFilterIds,
-  );
+  });
   return aggregateWonDealsFacts(allDeals, wonStageIds, stageConfigs, stageIds);
 }
 

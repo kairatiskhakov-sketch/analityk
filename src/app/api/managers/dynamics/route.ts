@@ -1,14 +1,12 @@
 import {
-  dealIsWon,
   parseOpportunity,
-  type BitrixDeal,
 } from "@/lib/bitrix/api";
 import {
   getActiveBitrixConnection,
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
-import { fetchDealsCached, fetchManagersCached } from "@/lib/bitrix/cache";
-import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
+import { fetchManagersCached } from "@/lib/bitrix/cache";
+import { fetchNewSalesForPeriod } from "@/lib/bitrix/stage-history-sales";
 import { jsonError, jsonOk } from "@/lib/http/json";
 
 export const dynamic = "force-dynamic";
@@ -95,10 +93,9 @@ export async function GET(req: Request) {
       });
     }
 
-    const [wonStageIds, managers, deals] = await Promise.all([
-      getOrSyncWonStageIds(url),
+    const [sales, managers] = await Promise.all([
+      fetchNewSalesForPeriod(url, dateFrom, dateTo),
       fetchManagersCached(url),
-      fetchDealsCached(url, dateFrom, dateTo, managerIds, pipelineId),
     ]);
     const managerName = new Map(managers.map((m) => [m.id, m.name]));
     const buckets = buildBuckets(dateFrom, dateTo, groupBy);
@@ -122,11 +119,11 @@ export async function GET(req: Request) {
     };
     const bucketIdx = new Map(buckets.map((b, i) => [b, i]));
 
-    for (const d of deals) {
-      if (!dealIsWon(d as BitrixDeal, wonStageIds)) continue;
+    for (const d of sales.wonDeals) {
       if (stageIds.size && !stageIds.has(String(d.STAGE_ID ?? ""))) continue;
       const mid = String(d.ASSIGNED_BY_ID ?? "");
       if (!mid) continue;
+      if (managerIds?.length && !managerIds.includes(mid)) continue;
       const rawDate = String(d.DATE_CREATE ?? "").slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) continue;
       const bucket = groupBy === "day" ? rawDate : weekStartYmd(new Date(`${rawDate}T00:00:00`));

@@ -8,7 +8,12 @@ import {
 } from "@/lib/bitrix/connection";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { parseDashboardFilters } from "@/lib/dashboard/dashboard-query";
-import { dealIsLost, dealIsWon } from "@/lib/bitrix/api";
+import {
+  dealAnalyticsType,
+  dealIsLost,
+  dealIsWon,
+  getStageConfigs,
+} from "@/lib/bitrix/api";
 import { getOrSyncWonStageIds } from "@/lib/bitrix/won-stages";
 import { resolveBitrixSourceLabel } from "@/lib/bitrix/bitrix-labels";
 
@@ -29,7 +34,7 @@ export async function GET(req: Request) {
       return jsonOk({ sources: [] });
     }
 
-    const [wonStageIds, deals, sourceCat] = await Promise.all([
+    const [wonStageIds, deals, sourceCat, stageConfigs] = await Promise.all([
       getOrSyncWonStageIds(url),
       fetchDealsCached(
         url,
@@ -39,12 +44,22 @@ export async function GET(req: Request) {
         filters.pipelineId,
       ),
       fetchSourcesCatalogCached(url),
+      getStageConfigs(),
     ]);
     const sourceMap = new Map(sourceCat.map((s) => [s.id, s.name]));
 
     const scopedDeals = filters.stageIds?.length
       ? deals.filter((d) => filters.stageIds!.includes(String(d.STAGE_ID ?? "")))
       : deals;
+
+    const isWon = (d: typeof scopedDeals[number]) =>
+      stageConfigs.length > 0
+        ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
+        : dealIsWon(d, wonStageIds);
+    const isLost = (d: typeof scopedDeals[number]) =>
+      stageConfigs.length > 0
+        ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "lost"
+        : dealIsLost(d);
 
     const grouped = new Map<string, { total: number; won: number; lost: number }>();
     for (const d of scopedDeals) {
@@ -53,8 +68,8 @@ export async function GET(req: Request) {
       const source = resolveBitrixSourceLabel(d.SOURCE_ID, sourceMap);
       const cur = grouped.get(source) ?? { total: 0, won: 0, lost: 0 };
       cur.total += 1;
-      if (dealIsWon(d, wonStageIds)) cur.won += 1;
-      else if (dealIsLost(d)) cur.lost += 1;
+      if (isWon(d)) cur.won += 1;
+      else if (isLost(d)) cur.lost += 1;
       grouped.set(source, cur);
     }
 

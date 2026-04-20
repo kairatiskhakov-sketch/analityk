@@ -46,6 +46,8 @@ export function LeadsPageClient() {
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [metrics, setMetrics] = useState<LeadMetric | null>(null);
+  const [metricsSeries, setMetricsSeries] = useState<{ date: string; leads: number; won: number; lost: number }[]>([]);
+  const [metricsManagers, setMetricsManagers] = useState<{ id: string; name: string }[]>([]);
   const [sources, setSources] = useState<any[]>([]);
   const [fails, setFails] = useState<any[]>([]);
   const [funnel, setFunnel] = useState<any[]>([]);
@@ -94,6 +96,8 @@ export function LeadsPageClient() {
         ]);
         if (cancelled) return;
         setMetrics(m.metrics ?? null);
+        setMetricsSeries(m.series ?? []);
+        setMetricsManagers(m.managers ?? []);
         setSources(s.sources ?? []);
         setFails(f.fails ?? []);
         setFunnel(fun.stages ?? []);
@@ -122,38 +126,43 @@ export function LeadsPageClient() {
     };
   }, [listQuery]);
 
+  // График строится из series всего периода (metrics endpoint), не из страницы таблицы.
+  // Недельная агрегация — склеиваем дни в ISO-недели.
   const series = useMemo(() => {
+    if (chartMode === "day") return metricsSeries;
     const bucket = new Map<string, { leads: number; won: number; lost: number }>();
-    for (const row of list.leads ?? []) {
-      const dt = String(row.createdAt ?? "").slice(0, 10);
-      const key = chartMode === "week" ? `${dt.slice(0, 8)}01` : dt;
+    for (const row of metricsSeries) {
+      // Ключ недели — понедельник той же недели (ISO).
+      const d = new Date(row.date);
+      if (Number.isNaN(d.getTime())) continue;
+      const day = (d.getUTCDay() + 6) % 7; // 0=Mon..6=Sun
+      d.setUTCDate(d.getUTCDate() - day);
+      const key = d.toISOString().slice(0, 10);
       const cur = bucket.get(key) ?? { leads: 0, won: 0, lost: 0 };
-      cur.leads += 1;
-      if (row.statusType === "won") cur.won += 1;
-      if (row.statusType === "lost") cur.lost += 1;
+      cur.leads += row.leads;
+      cur.won += row.won;
+      cur.lost += row.lost;
       bucket.set(key, cur);
     }
-    return Array.from(bucket.entries()).map(([date, v]) => ({ date, ...v })).sort((a, b) => a.date.localeCompare(b.date));
-  }, [list.leads, chartMode]);
+    return Array.from(bucket.entries())
+      .map(([date, v]) => ({ date, ...v }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [metricsSeries, chartMode]);
 
+  // Менеджеры в фильтре — все с сделками в периоде, не только из текущей страницы
   const managerOptions = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const l of (list.leads ?? []) as LeadRow[]) {
-      if (!l.managerId) continue;
-      map.set(l.managerId, l.manager);
-    }
-    return Array.from(map.entries())
-      .map(([value, label]) => ({ value, label }))
+    return metricsManagers
+      .map((m) => ({ value: m.id, label: m.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
-  }, [list.leads]);
+  }, [metricsManagers]);
 
+  // Источники в фильтре таблицы — из sources endpoint (всего периода), не из страницы
   const sourceOptions = useMemo<string[]>(() => {
-    const set = new Set<string>();
-    for (const l of (list.leads ?? []) as LeadRow[]) {
-      if (l.source) set.add(l.source);
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "ru"));
-  }, [list.leads]);
+    return sources
+      .map((s: any) => String(s.source ?? ""))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "ru"));
+  }, [sources]);
 
   function applyTopFilters() {
     setPage(1);

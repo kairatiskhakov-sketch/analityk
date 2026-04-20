@@ -5,8 +5,10 @@ import {
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
 import {
+  dealAnalyticsType,
   dealIsLost,
   dealIsWon,
+  getStageConfigs,
   parseOpportunity,
 } from "@/lib/bitrix/api";
 import { fetchDealsCached, fetchManagersCached } from "@/lib/bitrix/cache";
@@ -30,29 +32,43 @@ export async function GET(req: Request) {
     const dateFrom = filters.start.toISOString().slice(0, 10);
     const dateTo = filters.end.toISOString().slice(0, 10);
 
-    const [wonStageIds, deals, managers] = await Promise.all([
+    const [wonStageIds, deals, managers, stageConfigs] = await Promise.all([
       getOrSyncWonStageIds(url),
       fetchDealsCached(url, dateFrom, dateTo, filters.managerIds, filters.pipelineId),
       fetchManagersCached(url),
+      getStageConfigs(),
     ]);
 
     const scopedDeals = filters.stageIds?.length
       ? deals.filter((d) => filters.stageIds!.includes(String(d.STAGE_ID ?? "")))
       : deals;
 
-    const wonDeals = scopedDeals.filter((d) => dealIsWon(d, wonStageIds));
-    const lostDeals = scopedDeals.filter((d) => dealIsLost(d));
-    const activeDeals = scopedDeals.filter(
-      (d) => !dealIsWon(d, wonStageIds) && !dealIsLost(d),
-    );
+    const isWon = (d: typeof scopedDeals[number]) =>
+      stageConfigs.length > 0
+        ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
+        : dealIsWon(d, wonStageIds);
+    const isLost = (d: typeof scopedDeals[number]) =>
+      stageConfigs.length > 0
+        ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "lost"
+        : dealIsLost(d);
+
+    const wonDeals = scopedDeals.filter(isWon);
+    const lostDeals = scopedDeals.filter(isLost);
+    const activeDeals = scopedDeals.filter((d) => !isWon(d) && !isLost(d));
 
     const totalLeads = scopedDeals.length;
-    // «Новый» = создан сегодня (в пределах выбранного периода)
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // «Новый» = сделка без закрытия, не в стадии won/lost.
+    // Если период включает сегодня — считаем только созданные сегодня.
+    // Иначе — считаем активные сделки, которые были созданы в последний день периода.
+    const now = new Date();
+    const periodIncludesToday = filters.end.getTime() >= now.setHours(0, 0, 0, 0);
+    const anchorStart = periodIncludesToday
+      ? new Date().setHours(0, 0, 0, 0)
+      : new Date(filters.end).setHours(0, 0, 0, 0);
     const newLeads = scopedDeals.filter((d) => {
+      if (isWon(d) || isLost(d)) return false;
       const ts = Date.parse(String(d.DATE_CREATE ?? ""));
-      return Number.isFinite(ts) && ts >= todayStart.getTime();
+      return Number.isFinite(ts) && ts >= anchorStart;
     }).length;
 
     const won = wonDeals.length;
@@ -98,6 +114,31 @@ export async function GET(req: Request) {
       ? managers.find((m) => m.id === fastest.id)?.name ?? fastest.id
       : null;
 
+    // Ежедневная серия — от всех сделок в периоде, не от страницы таблицы
+    const dailyBucket = new Map<string, { leads: number; won: number; lost: number }>();
+    for (const d of scopedDeals) {
+      const day = String(d.DATE_CREATE ?? "").slice(0, 10);
+      if (!day) continue;
+      const cur = dailyBucket.get(day) ?? { leads: 0, won: 0, lost: 0 };
+      cur.leads += 1;
+      if (isWon(d)) cur.won += 1;
+      else if (isLost(d)) cur.lost += 1;
+      dailyBucket.set(day, cur);
+    }
+    const series = Array.from(dailyBucket.entries())
+      .map(([date, v]) => ({ date, ...v }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    // Полный список менеджеров, у которых есть сделки в периоде
+    const managerIdsInPeriod = new Set<string>();
+    for (const d of scopedDeals) {
+      const id = String(d.ASSIGNED_BY_ID ?? "");
+      if (id) managerIdsInPeriod.add(id);
+    }
+    const managerList = Array.from(managerIdsInPeriod)
+      .map((id) => ({ id, name: managers.find((m) => m.id === id)?.name ?? id }))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+
     const metrics = {
       totalLeads,
       newLeads,
@@ -112,7 +153,7 @@ export async function GET(req: Request) {
       staleLeads,
       fastestManager: fastestName,
     };
-    return jsonOk({ metrics });
+    return jsonOk({ metrics, series, managers: managerList });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error";
     return jsonError(msg, 500);

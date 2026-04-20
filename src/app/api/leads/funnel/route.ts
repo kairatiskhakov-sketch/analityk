@@ -30,7 +30,7 @@ export async function GET(req: Request) {
           crmType: "bitrix24",
           ...(filters.pipelineId ? { pipelineId: filters.pipelineId } : {}),
         },
-        orderBy: [{ pipelineName: "asc" }, { name: "asc" }],
+        orderBy: [{ pipelineName: "asc" }, { sort: "asc" }],
       }),
     ]);
 

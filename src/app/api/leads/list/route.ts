@@ -1,7 +1,9 @@
 import {
   BITRIX_LOSS_REASON_FIELD,
+  dealAnalyticsType,
   dealIsLost,
   dealIsWon,
+  getStageConfigs,
   parseOpportunity,
 } from "@/lib/bitrix/api";
 import { resolveBitrixSourceLabel } from "@/lib/bitrix/bitrix-labels";
@@ -53,15 +55,25 @@ export async function GET(req: Request) {
     const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
     if (!url) return jsonOk({ leads: [], total: 0, page, pages: 0 });
 
-    const [wonStageIds, deals, managers, sourceCat, lossReasonUfDict] = await Promise.all([
+    const [wonStageIds, deals, managers, sourceCat, lossReasonUfDict, stageConfigs] = await Promise.all([
       getOrSyncWonStageIds(url),
       fetchDealsCached(url, dateFrom, dateTo, managerIds.length ? managerIds : undefined, pipelineId),
       fetchManagersCached(url),
       fetchSourcesCatalogCached(url),
       fetchDealUserfieldDictCached(url, BITRIX_LOSS_REASON_FIELD),
+      getStageConfigs(),
     ]);
     const managerMap = new Map(managers.map((m) => [m.id, m.name]));
     const sourceMap = new Map(sourceCat.map((s) => [s.id, s.name]));
+
+    const isWon = (d: typeof deals[number]) =>
+      stageConfigs.length > 0
+        ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "won"
+        : dealIsWon(d, wonStageIds);
+    const isLost = (d: typeof deals[number]) =>
+      stageConfigs.length > 0
+        ? dealAnalyticsType(d, stageConfigs, wonStageIds) === "lost"
+        : dealIsLost(d);
 
     const rows = deals.map((d) => {
       const createdRaw = String(d.DATE_CREATE ?? "");
@@ -69,9 +81,9 @@ export async function GET(req: Request) {
       const daysInWork = Number.isFinite(createdTs)
         ? Math.max(0, Math.floor((Date.now() - createdTs) / 86400000))
         : 0;
-      const statusType = dealIsWon(d, wonStageIds)
+      const statusType = isWon(d)
         ? "won"
-        : dealIsLost(d)
+        : isLost(d)
           ? "lost"
           : daysInWork === 0
             ? "new"
@@ -82,7 +94,7 @@ export async function GET(req: Request) {
         (d as unknown as Record<string, unknown>)[BITRIX_LOSS_REASON_FIELD] ?? "",
       ).trim();
       let lostReason: string | null = null;
-      if (dealIsLost(d)) {
+      if (isLost(d)) {
         if (uf && uf !== "0") {
           lostReason = lossReasonUfDict.get(uf) ?? `Причина ${uf}`;
         } else {

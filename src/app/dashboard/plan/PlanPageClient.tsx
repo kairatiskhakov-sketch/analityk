@@ -287,10 +287,21 @@ export function PlanPageClient() {
     }));
   }, [chart, daysPassed, forecast, teamFact]);
 
-  const topManagers = useMemo(
-    () => [...managers].sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0)).slice(0, 3),
-    [managers],
-  );
+  const topManagers = useMemo(() => {
+    const withPct = managers
+      .map((m) => {
+        const raw = (mgrPlans[m.id] ?? "").replace(/\s/g, "").replace(",", ".");
+        const uiPlan = parseFloat(raw);
+        const plan = Number.isFinite(uiPlan) && uiPlan > 0 ? uiPlan : m.plan;
+        const pct = plan > 0 ? Math.round((m.fact / plan) * 100) : null;
+        return { ...m, effectivePlan: plan, effectivePct: pct };
+      })
+      // Только менеджеры с планом > 0 и хотя бы каким-то фактом
+      .filter((m) => m.effectivePlan > 0 && m.fact > 0);
+    return withPct
+      .sort((a, b) => (b.effectivePct ?? 0) - (a.effectivePct ?? 0))
+      .slice(0, 3);
+  }, [managers, mgrPlans]);
 
   async function savePlan() {
     setSaving(true);
@@ -693,12 +704,41 @@ export function PlanPageClient() {
               Топ выполнения
             </p>
             <div className="space-y-2">
-              {topManagers.map((m, idx) => (
-                <div key={m.id} className="flex items-center justify-between rounded-[10px] px-3 py-2" style={{ background: "var(--surface2)" }}>
-                  <span style={{ color: "var(--text)" }}>{idx + 1}. {abbrevName(m.name)}</span>
-                  <span style={{ color: kpiColor(m.pct) }}>{m.pct}%</span>
-                </div>
-              ))}
+              {topManagers.length === 0 ? (
+                <p className="text-[13px]" style={{ color: "var(--hint)" }}>
+                  Задайте планы менеджерам — появится рейтинг выполнения
+                </p>
+              ) : (
+                topManagers.map((m, idx) => (
+                  <div key={m.id} className="flex items-center justify-between rounded-[10px] px-3 py-2" style={{ background: "var(--surface2)" }}>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold"
+                        style={{
+                          background:
+                            idx === 0
+                              ? "linear-gradient(135deg, #FFD700, #FFA500)"
+                              : idx === 1
+                                ? "linear-gradient(135deg, #C0C0C0, #A0A0A0)"
+                                : "linear-gradient(135deg, #CD7F32, #A0522D)",
+                          color: "#ffffff",
+                        }}
+                      >
+                        {idx + 1}
+                      </span>
+                      <span style={{ color: "var(--text)" }}>{abbrevName(m.name)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px]" style={{ color: "var(--muted)" }}>
+                        {formatCurrency(m.fact)}
+                      </span>
+                      <span className="font-semibold" style={{ color: kpiColor(m.effectivePct ?? 0) }}>
+                        {m.effectivePct ?? 0}%
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
           <div className="glass rounded-[16px] border p-4" style={{ borderColor: "var(--border)" }}>

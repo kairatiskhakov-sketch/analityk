@@ -5,6 +5,7 @@ import { normalizeBitrixDomain } from "@/lib/integrations/bitrix24/client";
 import { parseBitrixWebhookUrl } from "@/lib/integrations/bitrix24/parse-webhook";
 import { syncBitrix24Connection } from "@/lib/integrations/bitrix24/sync";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 
 export const dynamic = "force-dynamic";
 
@@ -76,8 +77,9 @@ export async function POST(req: Request) {
     const enc = encrypt(parsed.webhookToken);
     const profileUserId = String(profileId);
 
+    const orgId = await resolveOrgId();
     const existing = await prisma.crmConnection.findFirst({
-      where: { crmType: "bitrix24" },
+      where: { orgId, crmType: "bitrix24" },
     });
 
     const connection = existing
@@ -94,6 +96,7 @@ export async function POST(req: Request) {
         })
       : await prisma.crmConnection.create({
           data: {
+            orgId,
             crmType: "bitrix24",
             isActive: true,
             bitrixDomain: domain,
@@ -107,7 +110,7 @@ export async function POST(req: Request) {
     let loadedStages = 0;
     try {
       await syncBitrix24Connection(connection.id);
-      loadedStages = await autoLoadStageConfigs(raw);
+      loadedStages = await autoLoadStageConfigs(raw, orgId);
     } catch (err) {
       console.error("Bitrix24 initial sync:", err);
     }

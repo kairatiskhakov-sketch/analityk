@@ -16,6 +16,7 @@ export function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [orgName, setOrgName] = useState("");
   const [password2, setPassword2] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -63,6 +64,7 @@ export function LoginForm() {
           name: name.trim(),
           email: email.trim(),
           password,
+          orgName: orgName.trim() || undefined,
         }),
       });
       const data = (await r.json()) as { error?: string };
@@ -212,6 +214,27 @@ export function LoginForm() {
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                className="w-full rounded-[10px] border px-3 py-2 text-[13px] outline-none"
+                style={{
+                  borderColor: "var(--border2)",
+                  background: "var(--surface2)",
+                  color: "var(--text)",
+                }}
+              />
+            </div>
+            <div>
+              <label
+                className="mb-1 block text-[11px] font-medium uppercase tracking-[0.1em]"
+                style={{ color: "var(--muted)" }}
+              >
+                Название компании
+              </label>
+              <input
+                type="text"
+                autoComplete="organization"
+                value={orgName}
+                onChange={(e) => setOrgName(e.target.value)}
+                placeholder="Необязательно"
                 className="w-full rounded-[10px] border px-3 py-2 text-[13px] outline-none"
                 style={{
                   borderColor: "var(--border2)",

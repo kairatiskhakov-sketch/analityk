@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +18,9 @@ type PipelineDto = {
 
 export async function GET() {
   try {
+    const orgId = await resolveOrgId();
     const rows = await prisma.stageConfig.findMany({
-      where: { crmType: "bitrix24" },
+      where: { orgId, crmType: "bitrix24" },
       orderBy: [{ pipelineName: "asc" }, { sort: "asc" }],
       select: {
         externalId: true,

@@ -1,6 +1,7 @@
 import { BitrixAPI } from "@/lib/bitrix/api";
 import { getBitrixWebhookBaseUrl } from "@/lib/bitrix/connection";
 import { prisma } from "@/lib/prisma";
+import { DEFAULT_ORG_ID } from "@/lib/org/context";
 
 type AutoStage = {
   externalId: string;
@@ -19,7 +20,10 @@ function mapSemanticsToType(semantics?: string): "won" | "lost" | "progress" {
   return "progress";
 }
 
-export async function autoLoadStageConfigs(webhookUrl: string): Promise<number> {
+export async function autoLoadStageConfigs(
+  webhookUrl: string,
+  orgId: string = DEFAULT_ORG_ID,
+): Promise<number> {
   const api = new BitrixAPI(webhookUrl);
   const pipelines = await api.getPipelines();
   const stages: AutoStage[] = [];
@@ -41,12 +45,14 @@ export async function autoLoadStageConfigs(webhookUrl: string): Promise<number> 
   for (const stage of stages) {
     await prisma.stageConfig.upsert({
       where: {
-        externalId_crmType: {
+        orgId_externalId_crmType: {
+          orgId,
           externalId: stage.externalId,
           crmType: "bitrix24",
         },
       },
       create: {
+        orgId,
         externalId: stage.externalId,
         name: stage.name,
         pipelineId: stage.pipelineId,

@@ -2,6 +2,7 @@ import type { BitrixDeal } from "@/lib/bitrix/api";
 import { dealIsLost, dealIsWon } from "@/lib/bitrix/deal-predicates";
 import type { StageConfig } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { DEFAULT_ORG_ID, resolveOrgId } from "@/lib/org/context";
 
 export type StageAnalyticsType = "won" | "lost" | "progress" | "ignore";
 
@@ -33,14 +34,18 @@ export function autoDetectStageType(stageName: string): StageAnalyticsType {
   return "progress";
 }
 
-export async function getStageConfigs(): Promise<StageConfig[]> {
+export async function getStageConfigs(orgId?: string): Promise<StageConfig[]> {
+  const effective = orgId ?? (await resolveOrgId()) ?? DEFAULT_ORG_ID;
   return prisma.stageConfig.findMany({
-    where: { crmType: "bitrix24" },
+    where: { orgId: effective, crmType: "bitrix24" },
   });
 }
 
-export async function countStageConfigs(): Promise<number> {
-  return prisma.stageConfig.count({ where: { crmType: "bitrix24" } });
+export async function countStageConfigs(orgId?: string): Promise<number> {
+  const effective = orgId ?? (await resolveOrgId()) ?? DEFAULT_ORG_ID;
+  return prisma.stageConfig.count({
+    where: { orgId: effective, crmType: "bitrix24" },
+  });
 }
 
 /**

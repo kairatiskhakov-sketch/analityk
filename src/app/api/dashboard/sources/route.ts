@@ -4,6 +4,7 @@ import { parseManagerIdsFromSearchParams } from "@/lib/dashboard/dashboard-query
 import { parseDashboardRangeFromSearchParams } from "@/lib/dashboard/range";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,8 @@ export async function GET(req: Request) {
       return jsonOk({ sources: [], error: null });
     }
 
+    const orgId = await resolveOrgId();
+
     try {
       const api = new BitrixAPI(webhookUrl);
       const leads = await api.getLeads({
@@ -45,14 +48,9 @@ export async function GET(req: Request) {
         managerIds: managerIds.length ? managerIds : undefined,
       });
 
-      console.log(
-        "Sample SOURCE_IDs:",
-        Array.from(new Set(leads.map((l) => l.SOURCE_ID))).slice(0, 10),
-      );
-
       // Справочник источников из БД
       const sourceRows = await prisma.crmDictionary.findMany({
-        where: { crmType: "bitrix24", entityId: "SOURCE" },
+        where: { orgId, crmType: "bitrix24", entityId: "SOURCE" },
       });
       const sourceMap: Record<string, string> = {};
       for (const s of sourceRows) sourceMap[s.externalId] = s.name;
@@ -71,13 +69,15 @@ export async function GET(req: Request) {
           sourceMap[externalId] = s.NAME || externalId;
           await prisma.crmDictionary.upsert({
             where: {
-              crmType_entityId_externalId: {
+              orgId_crmType_entityId_externalId: {
+                orgId,
                 crmType: "bitrix24",
                 entityId: "SOURCE",
                 externalId,
               },
             },
             create: {
+              orgId,
               crmType: "bitrix24",
               entityId: "SOURCE",
               externalId,

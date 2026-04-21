@@ -5,6 +5,7 @@ import {
 } from "@/lib/bitrix/connection";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,8 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   try {
-    const conn = await getActiveBitrixConnection();
+    const orgId = await resolveOrgId();
+    const conn = await getActiveBitrixConnection(orgId);
     const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
     if (url) {
       try {
@@ -31,7 +33,7 @@ export async function GET() {
     }
 
     const managers = await prisma.manager.findMany({
-      where: { crmType: "bitrix24" },
+      where: { crmType: "bitrix24", orgId },
       orderBy: { name: "asc" },
       select: { id: true, name: true, crmType: true, externalId: true },
     });

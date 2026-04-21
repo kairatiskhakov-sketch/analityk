@@ -12,6 +12,52 @@ enum Role {
   MANAGER
 }
 
+enum OrgRole {
+  OWNER
+  ADMIN
+  VIEWER
+}
+
+/// Тенант. Каждая подключённая компания = одна Organization.
+/// Все CRM/рекламные интеграции, менеджеры, планы, настройки — внутри неё.
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("free") // free | pro | business
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members           OrgMember[]
+  crmConnections    CrmConnection[]
+  googleConnections GoogleConnection[]
+  telegramConnections TelegramConnection[]
+  managers          Manager[]
+  planTargets       PlanTarget[]
+  salesPlans        SalesPlan[]
+  stageConfigs      StageConfig[]
+  crmDictionaries   CrmDictionary[]
+
+  @@index([slug])
+}
+
+/// Связка User ↔ Organization. Пользователь может быть в нескольких org.
+model OrgMember {
+  id        String   @id @default(cuid())
+  orgId     String
+  userId    String
+  role      OrgRole  @default(VIEWER)
+  invitedBy String?
+  createdAt DateTime @default(now())
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+  @@index([userId])
+  @@index([orgId])
+}
+
 // --- NextAuth.js + Saldo CRM пользователи ---
 model User {
   id            String    @id @default(cuid())
@@ -23,6 +69,8 @@ model User {
   role          Role      @default(MANAGER)
   initials      String?
   telegramId    String?
+  /// Последняя выбранная организация (для переключателя в UI)
+  currentOrgId  String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -30,12 +78,16 @@ model User {
   sessions      Session[]
   telegramChats TelegramChat[]
   dashboardModules DashboardModule[]
+  orgMemberships OrgMember[]
 }
 
 /// Включённые блоки дашборда на пользователя
 model DashboardModule {
   id         String   @id @default(cuid())
   userId     String
+  /// nullable для обратной совместимости; UI дашборда per-user остаётся,
+  /// но можно будет фильтровать настройки per-org в будущем
+  orgId      String?
   moduleKey  String
   isEnabled  Boolean  @default(true)
   position   Int      @default(0)
@@ -45,6 +97,7 @@ model DashboardModule {
 
   @@unique([userId, moduleKey])
   @@index([userId])
+  @@index([orgId])
 }
 
 model Account {
@@ -85,7 +138,10 @@ model VerificationToken {
 // --- CRM & integrations ---
 model CrmConnection {
   id         String    @id @default(cuid())
+  /// nullable на первом шаге миграции; бэкфилл через SQL; потом NOT NULL
+  orgId      String?
   crmType    String // "bitrix24" | "amocrm"
+  /// Активное подключение per-org (в рамках одной org только одно isActive=true)
   isActive   Boolean   @default(false)
   lastSyncAt DateTime?
 
@@ -103,13 +159,18 @@ model CrmConnection {
   amoRefreshToken    String?
   amoTokenExpiresAt  DateTime?
 
+  org            Organization?   @relation(fields: [orgId], references: [id], onDelete: Cascade)
   pipelineStages PipelineStage[]
   dealPipelines  DealPipeline[]
+
+  @@index([orgId])
+  @@index([orgId, isActive])
 }
 
 /// Кеш справочников Bitrix (SOURCE, причины отказа и т.д.) для расшифровки ID
 model CrmDictionary {
   id         String   @id @default(cuid())
+  orgId      String?
   crmType    String
   entityId   String
   externalId String
@@ -118,8 +179,10 @@ model CrmDictionary {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  @@unique([crmType, entityId, externalId])
-  @@index([crmType, entityId])
+  org Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, crmType, entityId, externalId])
+  @@index([orgId, crmType, entityId])
 }
 
 /// Воронки сделок Bitrix24 (кеш справочника)
@@ -157,6 +220,7 @@ model PipelineStage {
 
 model GoogleConnection {
   id             String   @id @default(cuid())
+  orgId          String?
   email          String
   accessToken    String
   refreshToken   String
@@ -174,10 +238,15 @@ model GoogleConnection {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  org Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
 }
 
 model TelegramConnection {
   id       String  @id @default(cuid())
+  orgId    String?
   botToken String
   isActive Boolean @default(false)
 
@@ -188,7 +257,10 @@ model TelegramConnection {
   notifyPlanAlert   Boolean @default(true)
   dailyReportTime   String  @default("18:00")
 
+  org   Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
   chats TelegramChat[]
+
+  @@index([orgId])
 }
 
 model TelegramChat {
@@ -209,6 +281,7 @@ model TelegramChat {
 /// Кеш пользователей CRM (Bitrix user id → имя)
 model Manager {
   id         String @id @default(cuid())
+  orgId      String?
   externalId String
   crmType    String
   name       String
@@ -216,14 +289,17 @@ model Manager {
   telegramId String?
   isActive   Boolean @default(true)
 
+  org         Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
   planTargets PlanTarget[]
 
-  @@unique([externalId, crmType])
+  @@unique([orgId, externalId, crmType])
+  @@index([orgId])
 }
 
 /// План продаж по периодам (команда и менеджеры)
 model PlanTarget {
   id         String   @id @default(cuid())
+  orgId      String?
   period     String // "2026-04" | "2026-Q2" | "2026"
   periodType String // "month" | "quarter" | "year"
   managerId  String? // null = общий план на команду
@@ -231,21 +307,28 @@ model PlanTarget {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   manager    Manager? @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  org        Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
-  @@unique([period, periodType, managerId])
+  @@unique([orgId, period, periodType, managerId])
+  @@index([orgId])
 }
 
 model SalesPlan {
   id        String   @id @default(cuid())
+  orgId     String?
   period    String
   managerId String?
   target    Float
   createdAt DateTime @default(now())
+  org       Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
 }
 
 /// Пользовательская классификация стадий сделок Bitrix24 для аналитики
 model StageConfig {
   id           String   @id @default(cuid())
+  orgId        String?
   externalId   String
   name         String
   pipelineId   String
@@ -257,5 +340,149 @@ model StageConfig {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  @@unique([externalId, crmType])
+  org Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, externalId, crmType])
+  @@index([orgId])
+}
+
+// --- Реклама: Meta Ads / TikTok Ads / Google Ads ---
+
+enum AdPlatform {
+  META
+  TIKTOK
+  GOOGLE
+}
+
+enum AdConnectionStatus {
+  ACTIVE
+  EXPIRED
+  ERROR
+  DISCONNECTED
+}
+
+/// Подключение рекламного кабинета. OAuth-токены храним здесь (в проде — через envelope encryption).
+model AdConnection {
+  id              String             @id @default(cuid())
+  orgId           String
+  platform        AdPlatform
+  accountId       String             // ID аккаунта в платформе (act_xxx для Meta, advertiser_id для TikTok, customer_id для Google)
+  accountName     String?
+  accessToken     String             @db.Text
+  refreshToken    String?            @db.Text
+  tokenExpiresAt  DateTime?
+  /// Доп. данные платформы (business_id, manager_customer_id и т.п.)
+  extra           String?            @db.Text
+  status          AdConnectionStatus @default(ACTIVE)
+  lastSyncAt      DateTime?
+  lastError       String?            @db.Text
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  campaigns AdCampaign[]
+  insights  AdInsightsDaily[]
+
+  @@unique([orgId, platform, accountId])
+  @@index([orgId])
+  @@index([status])
+}
+
+/// Кампания рекламной платформы (импортируем из API).
+model AdCampaign {
+  id           String     @id @default(cuid())
+  orgId        String
+  connectionId String
+  platform     AdPlatform
+  externalId   String
+  name         String
+  status       String?    // ACTIVE/PAUSED/...
+  objective    String?
+  dailyBudget  Float?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  connection AdConnection      @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  insights   AdInsightsDaily[]
+
+  @@unique([connectionId, externalId])
+  @@index([orgId])
+  @@index([platform])
+}
+
+/// Ежедневный снапшот метрик кампании. Обновляется cron-ом раз в час за последние 7 дней.
+model AdInsightsDaily {
+  id           String     @id @default(cuid())
+  orgId        String
+  connectionId String
+  campaignId   String
+  platform     AdPlatform
+  date         DateTime   @db.Date
+  impressions  Int        @default(0)
+  clicks       Int        @default(0)
+  spend        Float      @default(0)
+  leads        Int        @default(0)
+  currency     String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  connection AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  campaign   AdCampaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, date])
+  @@index([orgId, date])
+  @@index([orgId, platform, date])
+}
+
+// --- Attribution: tracking UTM/click-id → deals ---
+
+/// Первичный tracking-touch с лендинга клиента. Создаётся JS-сниппетом при первом визите.
+model TrackingTouch {
+  id          String   @id @default(cuid())
+  orgId       String
+  visitorId   String   // из cookie (uuid), привязываем к форме при submit
+  landingUrl  String?  @db.Text
+  referrer    String?  @db.Text
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
+  fbclid      String?
+  ttclid      String?
+  gclid       String?
+  userAgent   String?  @db.Text
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@index([orgId, visitorId])
+  @@index([orgId, createdAt])
+  @@index([fbclid])
+  @@index([ttclid])
+  @@index([gclid])
+}
+
+/// Связка CRM-сделки с tracking-touch и рекламной кампанией.
+/// Заполняется при получении webhook из CRM (ONCRMDEALADD) + матчинг по fbclid/gclid/email.
+model LeadAttribution {
+  id           String   @id @default(cuid())
+  orgId        String
+  /// ID сделки в CRM (Bitrix deal ID, AmoCRM lead ID)
+  crmDealId    String
+  crmType      String
+  /// Откуда пришло — FK на TrackingTouch (если смогли сматчить)
+  touchId      String?
+  /// К какой кампании привязано (если смогли)
+  campaignId   String?
+  platform     AdPlatform?
+  utmSource    String?
+  utmCampaign  String?
+  clickId      String?   // fbclid | ttclid | gclid
+  matchedBy    String?   // "fbclid" | "email" | "phone" | "utm"
+  confidence   Float     @default(1.0) // 0..1
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([orgId, crmDealId, crmType])
+  @@index([orgId, campaignId])
+  @@index([orgId, platform])
 }

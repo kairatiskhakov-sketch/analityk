@@ -1,5 +1,6 @@
 import { encrypt, decrypt } from "@/lib/crypto";
 import { prisma } from "@/lib/prisma";
+import { DEFAULT_ORG_ID } from "@/lib/org/context";
 import { createAmoClient } from "./client";
 import { AMO_STATUS_LOST, AMO_STATUS_WON, amoStatusType } from "./mapper";
 import {
@@ -90,6 +91,7 @@ export async function syncAmoConnection(
   if (!conn.isActive) {
     throw new Error("Интеграция AmoCRM выключена");
   }
+  const orgId = conn.orgId ?? DEFAULT_ORG_ID;
 
   const accessToken = await ensureAmoAccessToken(conn);
   const client = createAmoClient(conn.amoSubdomain!, accessToken);
@@ -112,12 +114,14 @@ export async function syncAmoConnection(
       const type = inferred === "ignore" ? "ignore" : inferred;
       await prisma.stageConfig.upsert({
         where: {
-          externalId_crmType: {
+          orgId_externalId_crmType: {
+            orgId,
             externalId: String(st.id),
             crmType: "amocrm",
           },
         },
         create: {
+          orgId,
           externalId: String(st.id),
           name: st.name || `Статус ${st.id}`,
           pipelineId: String(p.id),
@@ -146,13 +150,15 @@ export async function syncAmoConnection(
     const name = lr.name?.trim() || ext;
     await prisma.crmDictionary.upsert({
       where: {
-        crmType_entityId_externalId: {
+        orgId_crmType_entityId_externalId: {
+          orgId,
           crmType: "amocrm",
           entityId: "LOST_REASON",
           externalId: ext,
         },
       },
       create: {
+        orgId,
         crmType: "amocrm",
         entityId: "LOST_REASON",
         externalId: ext,
@@ -168,9 +174,10 @@ export async function syncAmoConnection(
     const ext = String(u.id);
     await prisma.manager.upsert({
       where: {
-        externalId_crmType: { externalId: ext, crmType: "amocrm" },
+        orgId_externalId_crmType: { orgId, externalId: ext, crmType: "amocrm" },
       },
       create: {
+        orgId,
         externalId: ext,
         crmType: "amocrm",
         name: u.name?.trim() || "Менеджер",

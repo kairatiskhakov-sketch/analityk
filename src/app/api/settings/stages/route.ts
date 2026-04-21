@@ -1,5 +1,6 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -7,10 +8,10 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const session = await auth();
-    console.log("GET stages session:", JSON.stringify(session));
+    const orgId = await resolveOrgId();
 
     const stages = await prisma.stageConfig.findMany({
-      where: { crmType: "bitrix24" },
+      where: { orgId, crmType: "bitrix24" },
       orderBy: [{ pipelineName: "asc" }, { sort: "asc" }],
     });
     return NextResponse.json({ stages, sessionUserId: session?.user?.id ?? null });
@@ -34,8 +35,8 @@ type PostBody = {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    console.log("POST stages session:", JSON.stringify(session));
+    await auth();
+    const orgId = await resolveOrgId();
 
     const body = (await req.json()) as PostBody;
     if (!body.stages || !Array.isArray(body.stages)) {
@@ -45,12 +46,14 @@ export async function POST(req: Request) {
     for (const stage of body.stages) {
       await prisma.stageConfig.upsert({
         where: {
-          externalId_crmType: {
+          orgId_externalId_crmType: {
+            orgId,
             externalId: stage.externalId,
             crmType: "bitrix24",
           },
         },
         create: {
+          orgId,
           externalId: stage.externalId,
           name: stage.name,
           pipelineId: stage.pipelineId,

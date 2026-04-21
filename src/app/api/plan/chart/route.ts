@@ -13,6 +13,7 @@ import {
 } from "@/lib/plan/period";
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/http/json";
+import { resolveOrgId } from "@/lib/org/context";
 
 export const dynamic = "force-dynamic";
 
@@ -33,12 +34,13 @@ export async function GET(req: Request) {
       return jsonError("Укажите period и periodType", 400);
     }
 
+    const orgId = await resolveOrgId();
     const teamRow = await prisma.planTarget.findFirst({
-      where: { period, periodType, managerId: null },
+      where: { orgId, period, periodType, managerId: null },
     });
     const teamTarget = teamRow?.target ?? 0;
 
-    const conn = await getActiveBitrixConnection();
+    const conn = await getActiveBitrixConnection(orgId);
     const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
     if (!url) {
       return jsonOk({ series: [] as { date: string; fact: number; planLine: number }[] });

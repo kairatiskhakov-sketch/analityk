@@ -33,7 +33,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     }),
   ],
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger }) {
       if (user) {
         const u = user as {
           id: string;
@@ -43,7 +43,42 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.role = u.role;
         token.id = u.id;
         token.initials = u.initials ?? initialsFromName(user.name ?? "");
+
+        // Resolve org on sign-in: prefer user's currentOrgId, else first membership.
+        try {
+          const { prisma } = await import("@/lib/prisma");
+          const dbUser = await prisma.user.findUnique({
+            where: { id: u.id },
+            select: { currentOrgId: true },
+          });
+          let orgId: string | null = dbUser?.currentOrgId ?? null;
+          if (!orgId) {
+            const membership = await prisma.orgMember.findFirst({
+              where: { userId: u.id },
+              select: { orgId: true },
+            });
+            orgId = membership?.orgId ?? null;
+          }
+          token.currentOrgId = orgId;
+        } catch {
+          token.currentOrgId = null;
+        }
       }
+
+      // Refresh currentOrgId when client calls update() (e.g. org switcher).
+      if (trigger === "update" && token.id) {
+        try {
+          const { prisma } = await import("@/lib/prisma");
+          const dbUser = await prisma.user.findUnique({
+            where: { id: token.id as string },
+            select: { currentOrgId: true },
+          });
+          token.currentOrgId = dbUser?.currentOrgId ?? null;
+        } catch {
+          /* keep previous value */
+        }
+      }
+
       return token;
     },
     async session({ session, token }) {
@@ -51,6 +86,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         session.user.id = token.id as string;
         session.user.role = token.role as Role;
         session.user.initials = (token.initials as string) ?? "";
+        session.user.currentOrgId =
+          (token.currentOrgId as string | null | undefined) ?? null;
       }
       return session;
     },

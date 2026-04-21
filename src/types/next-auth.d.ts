@@ -15,6 +15,7 @@ declare module "next-auth" {
       email: string;
       role: Role;
       initials: string;
+      currentOrgId: string | null;
     };
   }
 }
@@ -24,5 +25,6 @@ declare module "next-auth/jwt" {
     id?: string;
     role?: Role;
     initials?: string;
+    currentOrgId?: string | null;
   }
 }

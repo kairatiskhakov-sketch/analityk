@@ -6,6 +6,7 @@ import {
   getBitrixWebhookBaseUrl,
 } from "@/lib/bitrix/connection";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,8 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const filters = parseDashboardFilters(searchParams);
-    const conn = await getActiveBitrixConnection();
+    const orgId = await resolveOrgId();
+    const conn = await getActiveBitrixConnection(orgId);
     const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
     if (!url) return jsonOk({ stages: [], summary: { total: 0 } });
 
@@ -27,6 +29,7 @@ export async function GET(req: Request) {
       ),
       prisma.stageConfig.findMany({
         where: {
+          orgId,
           crmType: "bitrix24",
           ...(filters.pipelineId ? { pipelineId: filters.pipelineId } : {}),
         },

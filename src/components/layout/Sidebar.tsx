@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { CrmStatusResponse } from "@/lib/crm/status";
+import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 
 const NAV_GROUPS = [
   {
@@ -98,6 +99,10 @@ export function Sidebar({
           </p>
         </div>
       </Link>
+
+      <div className="mb-3">
+        <OrgSwitcher />
+      </div>
 
       <nav className="flex-1 space-y-4">
         {NAV_GROUPS.map((group) => (

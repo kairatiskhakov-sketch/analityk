@@ -1,13 +1,15 @@
 import { BitrixAPI } from "@/lib/bitrix/api";
 import { getActiveBitrixConnection, getBitrixWebhookBaseUrl } from "@/lib/bitrix/connection";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const connection = await getActiveBitrixConnection();
+    const orgId = await resolveOrgId();
+    const connection = await getActiveBitrixConnection(orgId);
     const webhookUrl = connection ? getBitrixWebhookBaseUrl(connection) : null;
     if (!webhookUrl) {
       return NextResponse.json({ managers: [], pipelines: [] });
@@ -16,12 +18,12 @@ export async function GET() {
     const api = new BitrixAPI(webhookUrl);
     const [managers, pipelinesRaw, stageConfigs] = await Promise.all([
       prisma.manager.findMany({
-        where: { crmType: "bitrix24", isActive: true },
+        where: { orgId, crmType: "bitrix24", isActive: true },
         orderBy: { name: "asc" },
         select: { id: true, externalId: true, name: true },
       }),
       api.getPipelines(),
-      prisma.stageConfig.findMany({ where: { crmType: "bitrix24" } }),
+      prisma.stageConfig.findMany({ where: { orgId, crmType: "bitrix24" } }),
     ]);
 
     const stageConfigMap = Object.fromEntries(

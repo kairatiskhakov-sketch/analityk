@@ -15,6 +15,7 @@ import {
 } from "@/lib/plan/period";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -58,13 +59,14 @@ export async function GET(req: Request) {
       return jsonError("Некорректный period", 400);
     }
 
+    const orgId = await resolveOrgId();
     const [targetsRows, managers] = await Promise.all([
       prisma.planTarget.findMany({
-        where: { period, periodType },
+        where: { orgId, period, periodType },
         select: { managerId: true, target: true },
       }),
       prisma.manager.findMany({
-        where: { crmType: "bitrix24", isActive: true },
+        where: { orgId, crmType: "bitrix24", isActive: true },
         orderBy: { name: "asc" },
         select: { id: true, externalId: true, name: true },
       }),
@@ -73,7 +75,7 @@ export async function GET(req: Request) {
     const totalTargetRow = targetsRows.find((t) => t.managerId === null);
     const totalPlan = totalTargetRow?.target ?? 0;
 
-    const conn = await getActiveBitrixConnection();
+    const conn = await getActiveBitrixConnection(orgId);
     const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
 
     let totalFact = 0;

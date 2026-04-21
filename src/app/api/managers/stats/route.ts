@@ -21,6 +21,7 @@ import {
 import { fetchNewSalesForPeriod } from "@/lib/bitrix/stage-history-sales";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 
 export const dynamic = "force-dynamic";
 
@@ -66,7 +67,8 @@ export async function GET(req: Request) {
     const pipelineId = searchParams.get("pipelineId")?.trim() || undefined;
     if (!dateFrom || !dateTo) return jsonError("Укажите dateFrom и dateTo", 400);
 
-    const conn = await getActiveBitrixConnection();
+    const orgId = await resolveOrgId();
+    const conn = await getActiveBitrixConnection(orgId);
     const url = conn ? getBitrixWebhookBaseUrl(conn) : null;
     if (!url) {
       return jsonOk({ kpi: null, managers: [], compare: [], error: null });
@@ -96,9 +98,10 @@ export async function GET(req: Request) {
         fetchSourcesCatalogCached(url),
         fetchDealUserfieldDictCached(url, BITRIX_LOSS_REASON_FIELD),
         fetchPipelinesCached(url),
-        prisma.manager.findMany({ where: { crmType: "bitrix24", isActive: true }, select: { id: true, externalId: true, name: true } }),
+        prisma.manager.findMany({ where: { orgId, crmType: "bitrix24", isActive: true }, select: { id: true, externalId: true, name: true } }),
         prisma.planTarget.findMany({
           where: {
+            orgId,
             period: `${new Date(`${dateTo}T00:00:00`).getFullYear()}-${String(new Date(`${dateTo}T00:00:00`).getMonth() + 1).padStart(2, "0")}`,
             periodType: "month",
           },

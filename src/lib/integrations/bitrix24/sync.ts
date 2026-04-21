@@ -1,5 +1,6 @@
 import { decrypt } from "@/lib/crypto";
 import { prisma } from "@/lib/prisma";
+import { DEFAULT_ORG_ID } from "@/lib/org/context";
 import { createBitrix24Client } from "./client";
 import type { BitrixStatusRow } from "./types";
 import {
@@ -69,6 +70,7 @@ export async function syncBitrix24Connection(
   if (!conn.isActive) {
     throw new Error("Интеграция Bitrix24 выключена");
   }
+  const orgId = conn.orgId ?? DEFAULT_ORG_ID;
 
   const token = conn.bitrixWebhookToken
     ? decrypt(conn.bitrixWebhookToken)
@@ -106,13 +108,15 @@ export async function syncBitrix24Connection(
       const name = pickStr(row.NAME)?.trim() || ext;
       await prisma.crmDictionary.upsert({
         where: {
-          crmType_entityId_externalId: {
+          orgId_crmType_entityId_externalId: {
+            orgId,
             crmType: "bitrix24",
             entityId: "SOURCE",
             externalId: ext,
           },
         },
         create: {
+          orgId,
           crmType: "bitrix24",
           entityId: "SOURCE",
           externalId: ext,
@@ -127,13 +131,15 @@ export async function syncBitrix24Connection(
       const name = pickStr(row.NAME)?.trim() || ext;
       await prisma.crmDictionary.upsert({
         where: {
-          crmType_entityId_externalId: {
+          orgId_crmType_entityId_externalId: {
+            orgId,
             crmType: "bitrix24",
             entityId: "LEAD_LOST_REASON",
             externalId: ext,
           },
         },
         create: {
+          orgId,
           crmType: "bitrix24",
           entityId: "LEAD_LOST_REASON",
           externalId: ext,
@@ -370,9 +376,10 @@ export async function syncBitrix24Connection(
     /** externalId = Bitrix user.ID (user.get), совпадает с ASSIGNED_BY_ID в сделках. */
     await prisma.manager.upsert({
       where: {
-        externalId_crmType: { externalId: ext, crmType: "bitrix24" },
+        orgId_externalId_crmType: { orgId, externalId: ext, crmType: "bitrix24" },
       },
       create: {
+        orgId,
         externalId: ext,
         crmType: "bitrix24",
         name,

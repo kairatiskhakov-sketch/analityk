@@ -1,6 +1,7 @@
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth/session";
+import { generateTrackingKey } from "@/lib/tracking/key";
 
 export const dynamic = "force-dynamic";
 
@@ -70,7 +71,7 @@ export async function POST(req: Request) {
 
   const org = await prisma.$transaction(async (tx) => {
     const created = await tx.organization.create({
-      data: { name, slug, plan: "free" },
+      data: { name, slug, plan: "free", trackingKey: generateTrackingKey() },
     });
     await tx.orgMember.create({
       data: { orgId: created.id, userId: user.id, role: "OWNER" },

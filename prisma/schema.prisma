@@ -25,6 +25,8 @@ model Organization {
   name      String
   slug      String   @unique
   plan      String   @default("free") // free | pro | business
+  /// Публичный ключ для JS tracking-сниппета. Клиент вставляет на лендинг.
+  trackingKey String @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -39,6 +41,7 @@ model Organization {
   crmDictionaries   CrmDictionary[]
 
   @@index([slug])
+  @@index([trackingKey])
 }
 
 /// Связка User ↔ Organization. Пользователь может быть в нескольких org.

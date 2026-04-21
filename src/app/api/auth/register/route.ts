@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import { generateTrackingKey } from "@/lib/tracking/key";
 
 function initialsFromName(name: string) {
   return name
@@ -101,6 +102,7 @@ export async function POST(req: Request) {
         name: orgNameFinal,
         slug,
         plan: "free",
+        trackingKey: generateTrackingKey(),
       },
     });
 

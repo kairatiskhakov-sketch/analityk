@@ -7,6 +7,7 @@ import {
   sendDailyTelegramReports,
   syncAllCrm,
   syncAllMetaAds,
+  syncAllTiktokAds,
 } from "@/lib/integrations/shared/scheduler";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +22,7 @@ function verifyCron(req: Request): boolean {
 /**
  * POST /api/cron
  * Authorization: Bearer CRON_SECRET
- * body: { "job": "sync" | "amo" | "sheets" | "telegram-daily" | "telegram-webhook" | "all" }
+ * body: { "job": "sync" | "amo" | "meta" | "tiktok" | "sheets" | "telegram-daily" | "telegram-webhook" | "all" }
  */
 export async function POST(req: Request) {
   if (!verifyCron(req)) {
@@ -39,6 +40,8 @@ export async function POST(req: Request) {
         return jsonOk({ result: await refreshAllAmoTokens() });
       case "meta":
         return jsonOk({ result: await syncAllMetaAds() });
+      case "tiktok":
+        return jsonOk({ result: await syncAllTiktokAds() });
       case "sheets":
         return jsonOk({ result: await exportToSheetsNightly() });
       case "telegram-daily":

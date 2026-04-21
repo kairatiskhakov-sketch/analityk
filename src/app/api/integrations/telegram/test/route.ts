@@ -1,6 +1,7 @@
 import { decrypt } from "@/lib/crypto";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { createTelegramBot } from "@/lib/integrations/telegram/bot";
+import { resolveOrgId } from "@/lib/org/context";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -15,10 +16,11 @@ export async function POST(req: Request) {
       return jsonError("Нужны connectionId и chatId");
     }
 
+    const orgId = await resolveOrgId();
     const conn = await prisma.telegramConnection.findUnique({
       where: { id: body.connectionId },
     });
-    if (!conn?.isActive) {
+    if (!conn?.isActive || conn.orgId !== orgId) {
       return jsonError("Подключение не найдено или выключено", 400);
     }
 

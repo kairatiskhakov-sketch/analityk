@@ -1,6 +1,7 @@
 import { decrypt } from "@/lib/crypto";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { createBitrix24Client } from "@/lib/integrations/bitrix24/client";
+import { resolveOrgId } from "@/lib/org/context";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -16,10 +17,11 @@ export async function POST(req: Request) {
       return jsonError("Нужен connectionId", 400);
     }
 
+    const orgId = await resolveOrgId();
     const conn = await prisma.crmConnection.findUnique({
       where: { id },
     });
-    if (!conn || conn.crmType !== "bitrix24") {
+    if (!conn || conn.crmType !== "bitrix24" || conn.orgId !== orgId) {
       return jsonError("Подключение не найдено", 404);
     }
 

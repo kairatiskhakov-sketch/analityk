@@ -1,5 +1,6 @@
 import { jsonError } from "@/lib/http/json";
 import { buildAmoAuthorizationUrl } from "@/lib/integrations/amocrm/oauth";
+import { resolveOrgId } from "@/lib/org/context";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
@@ -13,10 +14,11 @@ export async function GET(req: Request) {
       return jsonError("Нужен query connectionId");
     }
 
+    const orgId = await resolveOrgId();
     const conn = await prisma.crmConnection.findUnique({
       where: { id: connectionId },
     });
-    if (!conn || conn.crmType !== "amocrm" || !conn.amoSubdomain) {
+    if (!conn || conn.crmType !== "amocrm" || !conn.amoSubdomain || conn.orgId !== orgId) {
       return jsonError("Подключение AmoCRM не найдено", 404);
     }
 

@@ -1,3 +1,4 @@
+import { resolveOrgId } from "@/lib/org/context";
 import { prisma } from "@/lib/prisma";
 
 export type CrmStatusResponse = {
@@ -30,11 +31,12 @@ export type CrmStatusResponse = {
 };
 
 export async function getCrmStatusSnapshot(): Promise<CrmStatusResponse> {
+  const orgId = await resolveOrgId();
   const [bitrixConn, amoConn, telegramConn, googleConn] = await Promise.all([
-    prisma.crmConnection.findFirst({ where: { crmType: "bitrix24" } }),
-    prisma.crmConnection.findFirst({ where: { crmType: "amocrm" } }),
-    prisma.telegramConnection.findFirst(),
-    prisma.googleConnection.findFirst(),
+    prisma.crmConnection.findFirst({ where: { orgId, crmType: "bitrix24" } }),
+    prisma.crmConnection.findFirst({ where: { orgId, crmType: "amocrm" } }),
+    prisma.telegramConnection.findFirst({ where: { orgId } }),
+    prisma.googleConnection.findFirst({ where: { orgId } }),
   ]);
 
   const bitrixConnected = Boolean(

@@ -1,5 +1,6 @@
 import { encrypt } from "@/lib/crypto";
 import { jsonError, jsonOk } from "@/lib/http/json";
+import { resolveOrgId } from "@/lib/org/context";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -21,9 +22,17 @@ export async function POST(req: Request) {
       return jsonError("Нужен botToken");
     }
 
+    const orgId = await resolveOrgId();
     const enc = encrypt(body.botToken.trim());
 
     if (body.connectionId) {
+      const existing = await prisma.telegramConnection.findUnique({
+        where: { id: body.connectionId },
+        select: { orgId: true },
+      });
+      if (!existing || existing.orgId !== orgId) {
+        return jsonError("Подключение не найдено", 404);
+      }
       const updated = await prisma.telegramConnection.update({
         where: { id: body.connectionId },
         data: {
@@ -42,6 +51,7 @@ export async function POST(req: Request) {
 
     const created = await prisma.telegramConnection.create({
       data: {
+        orgId,
         botToken: enc,
         isActive: true,
         notifyNewLead: body.notifyNewLead ?? true,

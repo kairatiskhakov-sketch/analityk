@@ -13,18 +13,10 @@ export async function POST(req: Request) {
     }
 
     const { searchParams } = new URL(req.url);
-    let connectionId = searchParams.get("connectionId");
+    const connectionId = searchParams.get("connectionId");
 
     if (!connectionId) {
-      const first = await prisma.telegramConnection.findFirst({
-        where: { isActive: true },
-        orderBy: { id: "desc" },
-      });
-      connectionId = first?.id ?? null;
-    }
-
-    if (!connectionId) {
-      return new Response("No telegram connection", { status: 404 });
+      return new Response("Missing connectionId", { status: 400 });
     }
 
     const conn = await prisma.telegramConnection.findUnique({

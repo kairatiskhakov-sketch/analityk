@@ -14,19 +14,19 @@ export async function POST(req: Request) {
     const body = (await req.json()) as unknown;
     const portalDomain = extractBitrixAuthDomain(body);
 
+    if (!portalDomain) {
+      return jsonError("В теле webhook отсутствует portal domain", 400);
+    }
+
     const connections = await prisma.crmConnection.findMany({
       where: { crmType: "bitrix24", isActive: true },
     });
 
-    let conn = connections.find((c) =>
+    const conn = connections.find((c) =>
       c.bitrixDomain
         ? verifyBitrixWebhookPortalDomain(portalDomain, c.bitrixDomain)
         : false,
     );
-
-    if (!conn && !portalDomain && connections.length === 1) {
-      conn = connections[0];
-    }
 
     if (!conn) {
       return jsonError("Подключение Bitrix24 не найдено по домену", 404);

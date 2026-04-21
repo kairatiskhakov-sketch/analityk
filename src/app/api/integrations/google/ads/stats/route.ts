@@ -6,6 +6,8 @@ import {
 } from "@/lib/integrations/google/ads";
 import { getGoogleAccessToken } from "@/lib/integrations/google/connection";
 import { parsePeriodToDateRange } from "@/lib/integrations/google/period";
+import { resolveOrgId } from "@/lib/org/context";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +18,15 @@ export async function GET(req: Request) {
     const period = searchParams.get("period");
     if (!connectionId) {
       return jsonError("Нужен connectionId");
+    }
+
+    const orgId = await resolveOrgId();
+    const owner = await prisma.googleConnection.findUnique({
+      where: { id: connectionId },
+      select: { orgId: true },
+    });
+    if (!owner || owner.orgId !== orgId) {
+      return jsonError("Подключение не найдено", 404);
     }
 
     const { accessToken, connection } = await getGoogleAccessToken(connectionId);

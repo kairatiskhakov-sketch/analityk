@@ -1,4 +1,5 @@
 import { jsonError, jsonOk } from "@/lib/http/json";
+import { resolveOrgId } from "@/lib/org/context";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,15 @@ export async function GET(req: Request) {
     const connectionId = searchParams.get("connectionId");
     if (!connectionId) {
       return jsonError("Нужен connectionId");
+    }
+
+    const orgId = await resolveOrgId();
+    const conn = await prisma.telegramConnection.findUnique({
+      where: { id: connectionId },
+      select: { orgId: true },
+    });
+    if (!conn || conn.orgId !== orgId) {
+      return jsonError("Подключение не найдено", 404);
     }
 
     const chats = await prisma.telegramChat.findMany({

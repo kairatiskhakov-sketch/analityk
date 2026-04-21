@@ -2,6 +2,8 @@ import { bitrixLeadExportRowsForDay } from "@/lib/bitrix/reporting";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { getGoogleAccessToken } from "@/lib/integrations/google/connection";
 import { exportDailyReport } from "@/lib/integrations/google/sheets";
+import { resolveOrgId } from "@/lib/org/context";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +16,15 @@ export async function POST(req: Request) {
     };
     if (!body.connectionId?.trim()) {
       return jsonError("Нужен connectionId");
+    }
+
+    const orgId = await resolveOrgId();
+    const owner = await prisma.googleConnection.findUnique({
+      where: { id: body.connectionId },
+      select: { orgId: true },
+    });
+    if (!owner || owner.orgId !== orgId) {
+      return jsonError("Подключение не найдено", 404);
     }
 
     const { accessToken, connection } = await getGoogleAccessToken(body.connectionId);

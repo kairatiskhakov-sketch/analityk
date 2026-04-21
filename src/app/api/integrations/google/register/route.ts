@@ -1,5 +1,6 @@
 import { encrypt } from "@/lib/crypto";
 import { jsonError, jsonOk } from "@/lib/http/json";
+import { resolveOrgId } from "@/lib/org/context";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -20,12 +21,20 @@ export async function POST(req: Request) {
       analyticsPropertyId?: string | null;
     };
 
+    const orgId = await resolveOrgId();
     const encEmpty = encrypt("");
     const devTok = body.adsDeveloperToken?.trim()
       ? encrypt(body.adsDeveloperToken.trim())
       : null;
 
     if (body.connectionId) {
+      const existing = await prisma.googleConnection.findUnique({
+        where: { id: body.connectionId },
+        select: { orgId: true },
+      });
+      if (!existing || existing.orgId !== orgId) {
+        return jsonError("Подключение не найдено", 404);
+      }
       const updated = await prisma.googleConnection.update({
         where: { id: body.connectionId },
         data: {
@@ -43,6 +52,7 @@ export async function POST(req: Request) {
 
     const created = await prisma.googleConnection.create({
       data: {
+        orgId,
         email: "pending@oauth.local",
         accessToken: encEmpty,
         refreshToken: encEmpty,

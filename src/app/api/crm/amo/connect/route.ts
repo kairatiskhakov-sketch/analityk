@@ -1,6 +1,7 @@
 import { encrypt } from "@/lib/crypto";
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { normalizeAmoSubdomain } from "@/lib/integrations/amocrm/client";
+import { resolveOrgId } from "@/lib/org/context";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -21,11 +22,19 @@ export async function POST(req: Request) {
       return jsonError("Нужны subdomain, clientId, clientSecret");
     }
 
+    const orgId = await resolveOrgId();
     const subdomain = normalizeAmoSubdomain(body.subdomain);
     const clientId = body.clientId.trim();
     const encSecret = encrypt(body.clientSecret.trim());
 
     if (body.connectionId) {
+      const existing = await prisma.crmConnection.findUnique({
+        where: { id: body.connectionId },
+        select: { orgId: true },
+      });
+      if (!existing || existing.orgId !== orgId) {
+        return jsonError("Подключение не найдено", 404);
+      }
       const updated = await prisma.crmConnection.update({
         where: { id: body.connectionId },
         data: {
@@ -40,6 +49,7 @@ export async function POST(req: Request) {
 
     const created = await prisma.crmConnection.create({
       data: {
+        orgId,
         crmType: "amocrm",
         isActive: false,
         amoSubdomain: subdomain,

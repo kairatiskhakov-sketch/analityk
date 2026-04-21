@@ -5,9 +5,18 @@ import {
   verifyBitrixWebhookPortalDomain,
 } from "@/lib/integrations/bitrix24/webhook";
 import { syncBitrix24Connection } from "@/lib/integrations/bitrix24/sync";
+import { attributeBitrixEntity } from "@/lib/integrations/bitrix24/attribution";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
+
+/** Какую сущность трогаем по имени события Bitrix24. */
+function eventToEntityType(event: string): "deal" | "lead" | null {
+  const e = event.toUpperCase();
+  if (e.includes("DEAL")) return "deal";
+  if (e.includes("LEAD")) return "lead";
+  return null;
+}
 
 export async function POST(req: Request) {
   try {
@@ -41,11 +50,28 @@ export async function POST(req: Request) {
       sync = undefined;
     }
 
+    // Атрибуция: если пришло событие по deal/lead и есть entityId —
+    // тянем сущность из Bitrix и матчим по tracking-полям.
+    let attribution: Awaited<ReturnType<typeof attributeBitrixEntity>> = null;
+    const entityType = eventToEntityType(parsed.event);
+    if (entityType && parsed.entityId) {
+      try {
+        attribution = await attributeBitrixEntity(
+          conn.id,
+          entityType,
+          parsed.entityId,
+        );
+      } catch {
+        attribution = null;
+      }
+    }
+
     return jsonOk({
       received: true,
       event: parsed.event,
       entityId: parsed.entityId,
       sync,
+      attribution,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка";

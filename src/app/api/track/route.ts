@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { rateLimit } from "@/lib/http/rate-limit";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +10,7 @@ export const dynamic = "force-dynamic";
  * CORS: открыт (*), т.к. сниппет работает с чужого домена. Аутентификация —
  * через публичный trackingKey организации.
  *
- * Никакой session / cookie не требуется. Rate-limit — TODO (позже).
+ * Rate-limit: in-memory bucket 60 req/min/IP (см. src/lib/http/rate-limit.ts).
  */
 
 function corsHeaders(): HeadersInit {
@@ -56,6 +57,23 @@ function clientIp(req: Request): string | null {
 
 export async function POST(req: Request) {
   try {
+    const ip = clientIp(req) ?? "unknown";
+    const rl = rateLimit(`track:${ip}`, { limit: 60, windowMs: 60_000 });
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { ok: false, error: "Too many requests" },
+        {
+          status: 429,
+          headers: {
+            ...corsHeaders(),
+            "Retry-After": String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))),
+            "X-RateLimit-Limit": String(rl.limit),
+            "X-RateLimit-Remaining": String(rl.remaining),
+          },
+        },
+      );
+    }
+
     const body = (await req.json().catch(() => null)) as TrackPayload | null;
     if (!body) {
       return NextResponse.json(

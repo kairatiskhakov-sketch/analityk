@@ -6,6 +6,7 @@ import {
   verifyAmoWebhookSignature,
 } from "@/lib/integrations/amocrm/webhook";
 import { syncAmoConnection } from "@/lib/integrations/amocrm/sync";
+import { attributeAmoLead } from "@/lib/integrations/amocrm/attribution";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -53,10 +54,23 @@ export async function POST(req: Request) {
       sync = undefined;
     }
 
+    // Атрибуция по всем пришедшим lead id (add + update), best-effort.
+    const leadIds = [...parsed.leadsAdd, ...parsed.leadsUpdate];
+    const attributed: number[] = [];
+    for (const leadId of leadIds) {
+      try {
+        const r = await attributeAmoLead(conn.id, leadId);
+        if (r) attributed.push(leadId);
+      } catch {
+        /* silent */
+      }
+    }
+
     return jsonOk({
       received: true,
       leadsAdd: parsed.leadsAdd.length,
       leadsUpdate: parsed.leadsUpdate.length,
+      attributed: attributed.length,
       sync,
     });
   } catch (e) {

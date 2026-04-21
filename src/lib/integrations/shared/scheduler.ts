@@ -11,6 +11,7 @@ import {
 } from "@/lib/integrations/amocrm/sync";
 import { getGoogleAccessToken } from "@/lib/integrations/google/connection";
 import { exportDailyReport } from "@/lib/integrations/google/sheets";
+import { syncMetaConnection } from "@/lib/integrations/meta/sync";
 import { setTelegramWebhook } from "@/lib/integrations/telegram/bot";
 import {
   broadcastToAll,
@@ -38,6 +39,33 @@ export async function syncAllCrm(): Promise<SchedulerJobResult> {
   }
   return {
     job: "syncAllCrm",
+    ok: errors.length === 0,
+    detail: errors.length ? errors.join("; ") : `connections=${conns.length}`,
+  };
+}
+
+/** Синхронизация insights по всем активным Meta-подключениям. */
+export async function syncAllMetaAds(): Promise<SchedulerJobResult> {
+  const conns = await prisma.adConnection.findMany({
+    where: { platform: "META", status: "ACTIVE" },
+  });
+  const errors: string[] = [];
+  for (const c of conns) {
+    try {
+      await syncMetaConnection(c.id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`${c.id}: ${msg}`);
+      await prisma.adConnection
+        .update({
+          where: { id: c.id },
+          data: { status: "ERROR", lastError: msg.slice(0, 500) },
+        })
+        .catch(() => undefined);
+    }
+  }
+  return {
+    job: "syncAllMetaAds",
     ok: errors.length === 0,
     detail: errors.length ? errors.join("; ") : `connections=${conns.length}`,
   };
@@ -171,6 +199,7 @@ export async function runAllScheduledJobs(): Promise<SchedulerJobResult[]> {
   return [
     await syncAllCrm(),
     await refreshAllAmoTokens(),
+    await syncAllMetaAds(),
     await exportToSheetsNightly(),
     await sendDailyTelegramReports(false),
     await registerTelegramWebhooks(),

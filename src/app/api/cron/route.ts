@@ -6,6 +6,7 @@ import {
   runAllScheduledJobs,
   sendDailyTelegramReports,
   syncAllCrm,
+  syncAllMetaAds,
 } from "@/lib/integrations/shared/scheduler";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,8 @@ export async function POST(req: Request) {
         return jsonOk({ result: await syncAllCrm() });
       case "amo":
         return jsonOk({ result: await refreshAllAmoTokens() });
+      case "meta":
+        return jsonOk({ result: await syncAllMetaAds() });
       case "sheets":
         return jsonOk({ result: await exportToSheetsNightly() });
       case "telegram-daily":

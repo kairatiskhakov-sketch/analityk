@@ -4,7 +4,7 @@
  *        https://developers.facebook.com/docs/marketing-api/overview
  */
 
-export const META_GRAPH_VERSION = "v19.0";
+export const META_GRAPH_VERSION = "v25.0";
 export const META_OAUTH_SCOPES = ["ads_read", "business_management"] as const;
 
 type MetaConfig = {

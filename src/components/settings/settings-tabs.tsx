@@ -7,6 +7,7 @@ import { BitrixConnectForm } from "@/components/settings/bitrix-connect-form";
 import { DashboardModulesPanel } from "@/components/settings/dashboard-modules-panel";
 import { StageConfigPanel } from "@/components/settings/stage-config-panel";
 import { TrackingPanel } from "@/components/settings/tracking-panel";
+import { AdsPanel } from "@/components/settings/ads-panel";
 import {
   AmoIntegrationCard,
   GoogleIntegrationCard,
@@ -16,6 +17,7 @@ import type { CrmStatusResponse } from "@/lib/crm/status";
 
 const TABS = [
   { key: "integrations", label: "Интеграции" },
+  { key: "ads", label: "Рекламные кабинеты" },
   { key: "tracking", label: "Трекинг" },
   { key: "stages", label: "Воронки и этапы" },
   { key: "modules", label: "Модули дашборда" },
@@ -82,6 +84,7 @@ export function SettingsTabs({ crmStatus, bitrixInitial }: Props) {
           </>
         ) : null}
 
+        {tab === "ads" ? <AdsPanel /> : null}
         {tab === "tracking" ? <TrackingPanel /> : null}
         {tab === "stages" ? <StageConfigPanel /> : null}
         {tab === "modules" ? <DashboardModulesPanel /> : null}

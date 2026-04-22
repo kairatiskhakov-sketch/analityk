@@ -8,6 +8,15 @@
     },
     "src/app/api/dashboard/metrics/route.ts": {
       "maxDuration": 30
+    },
+    "src/app/api/cron/ads/route.ts": {
+      "maxDuration": 300
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/ads",
+      "schedule": "15 3 * * *"
+    }
+  ]
 }

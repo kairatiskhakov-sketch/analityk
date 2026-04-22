@@ -21,27 +21,51 @@ enum OrgRole {
 /// Тенант. Каждая подключённая компания = одна Organization.
 /// Все CRM/рекламные интеграции, менеджеры, планы, настройки — внутри неё.
 model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
-  plan      String   @default("free") // free | pro | business
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  plan        String   @default("free") // free | pro | business
   /// Публичный ключ для JS tracking-сниппета. Клиент вставляет на лендинг.
-  trackingKey String @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  trackingKey String   @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  members           OrgMember[]
-  crmConnections    CrmConnection[]
-  googleConnections GoogleConnection[]
+  members             OrgMember[]
+  invites             OrgInvite[]
+  crmConnections      CrmConnection[]
+  googleConnections   GoogleConnection[]
   telegramConnections TelegramConnection[]
-  managers          Manager[]
-  planTargets       PlanTarget[]
-  salesPlans        SalesPlan[]
-  stageConfigs      StageConfig[]
-  crmDictionaries   CrmDictionary[]
+  managers            Manager[]
+  planTargets         PlanTarget[]
+  salesPlans          SalesPlan[]
+  stageConfigs        StageConfig[]
+  crmDictionaries     CrmDictionary[]
 
   @@index([slug])
   @@index([trackingKey])
+}
+
+/// Приглашение в организацию по токену. Отправляется пользователю,
+/// которого ещё нет в системе (или просто «по ссылке»). Принимается
+/// залогиненным пользователем через POST /api/invites/:token/accept.
+model OrgInvite {
+  id         String    @id @default(cuid())
+  orgId      String
+  email      String // email, для кого приглашение (lowercased)
+  role       OrgRole   @default(VIEWER)
+  token      String    @unique
+  invitedBy  String? // userId того, кто создал приглашение
+  acceptedBy String? // userId того, кто принял (null если pending)
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([email])
+  @@index([token])
 }
 
 /// Связка User ↔ Organization. Пользователь может быть в нескольких org.
@@ -77,26 +101,26 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts      Account[]
-  sessions      Session[]
-  telegramChats TelegramChat[]
+  accounts         Account[]
+  sessions         Session[]
+  telegramChats    TelegramChat[]
   dashboardModules DashboardModule[]
-  orgMemberships OrgMember[]
+  orgMemberships   OrgMember[]
 }
 
 /// Включённые блоки дашборда на пользователя
 model DashboardModule {
-  id         String   @id @default(cuid())
-  userId     String
+  id        String   @id @default(cuid())
+  userId    String
   /// nullable для обратной совместимости; UI дашборда per-user остаётся,
   /// но можно будет фильтровать настройки per-org в будущем
-  orgId      String?
-  moduleKey  String
-  isEnabled  Boolean  @default(true)
-  position   Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId     String?
+  moduleKey String
+  isEnabled Boolean  @default(true)
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, moduleKey])
   @@index([userId])
@@ -148,19 +172,19 @@ model CrmConnection {
   isActive   Boolean   @default(false)
   lastSyncAt DateTime?
 
-  bitrixDomain          String?
-  bitrixWebhookToken    String?
+  bitrixDomain        String?
+  bitrixWebhookToken  String?
   /// ID пользователя из сегмента URL вебхука (/rest/{id}/)
-  bitrixUserId          String?
+  bitrixUserId        String?
   /// ID пользователя из ответа profile (для отображения)
-  bitrixProfileUserId   String?
+  bitrixProfileUserId String?
 
-  amoSubdomain       String?
-  amoClientId        String?
-  amoClientSecret    String?
-  amoAccessToken     String?
-  amoRefreshToken    String?
-  amoTokenExpiresAt  DateTime?
+  amoSubdomain      String?
+  amoClientId       String?
+  amoClientSecret   String?
+  amoAccessToken    String?
+  amoRefreshToken   String?
+  amoTokenExpiresAt DateTime?
 
   org            Organization?   @relation(fields: [orgId], references: [id], onDelete: Cascade)
   pipelineStages PipelineStage[]
@@ -229,9 +253,9 @@ model GoogleConnection {
   refreshToken   String
   tokenExpiresAt DateTime
 
-  adsEnabled          Boolean @default(false)
-  adsCustomerId       String?
-  adsDeveloperToken   String?
+  adsEnabled        Boolean @default(false)
+  adsCustomerId     String?
+  adsDeveloperToken String?
 
   sheetsEnabled       Boolean @default(false)
   sheetsSpreadsheetId String?
@@ -260,14 +284,14 @@ model TelegramConnection {
   notifyPlanAlert   Boolean @default(true)
   dailyReportTime   String  @default("18:00")
 
-  org   Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org   Organization?  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   chats TelegramChat[]
 
   @@index([orgId])
 }
 
 model TelegramChat {
-  id           String @id @default(cuid())
+  id           String             @id @default(cuid())
   chatId       String
   chatType     String // "private" | "group" | "supergroup"
   title        String?
@@ -283,7 +307,7 @@ model TelegramChat {
 
 /// Кеш пользователей CRM (Bitrix user id → имя)
 model Manager {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   orgId      String?
   externalId String
   crmType    String
@@ -301,15 +325,15 @@ model Manager {
 
 /// План продаж по периодам (команда и менеджеры)
 model PlanTarget {
-  id         String   @id @default(cuid())
+  id         String        @id @default(cuid())
   orgId      String?
   period     String // "2026-04" | "2026-Q2" | "2026"
   periodType String // "month" | "quarter" | "year"
   managerId  String? // null = общий план на команду
   target     Float
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  manager    Manager? @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  manager    Manager?      @relation(fields: [managerId], references: [id], onDelete: Cascade)
   org        Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@unique([orgId, period, periodType, managerId])
@@ -317,12 +341,12 @@ model PlanTarget {
 }
 
 model SalesPlan {
-  id        String   @id @default(cuid())
+  id        String        @id @default(cuid())
   orgId     String?
   period    String
   managerId String?
   target    Float
-  createdAt DateTime @default(now())
+  createdAt DateTime      @default(now())
   org       Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@index([orgId])
@@ -366,21 +390,21 @@ enum AdConnectionStatus {
 
 /// Подключение рекламного кабинета. OAuth-токены храним здесь (в проде — через envelope encryption).
 model AdConnection {
-  id              String             @id @default(cuid())
-  orgId           String
-  platform        AdPlatform
-  accountId       String             // ID аккаунта в платформе (act_xxx для Meta, advertiser_id для TikTok, customer_id для Google)
-  accountName     String?
-  accessToken     String             @db.Text
-  refreshToken    String?            @db.Text
-  tokenExpiresAt  DateTime?
+  id             String             @id @default(cuid())
+  orgId          String
+  platform       AdPlatform
+  accountId      String // ID аккаунта в платформе (act_xxx для Meta, advertiser_id для TikTok, customer_id для Google)
+  accountName    String?
+  accessToken    String             @db.Text
+  refreshToken   String?            @db.Text
+  tokenExpiresAt DateTime?
   /// Доп. данные платформы (business_id, manager_customer_id и т.п.)
-  extra           String?            @db.Text
-  status          AdConnectionStatus @default(ACTIVE)
-  lastSyncAt      DateTime?
-  lastError       String?            @db.Text
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  extra          String?            @db.Text
+  status         AdConnectionStatus @default(ACTIVE)
+  lastSyncAt     DateTime?
+  lastError      String?            @db.Text
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
 
   campaigns AdCampaign[]
   insights  AdInsightsDaily[]
@@ -398,7 +422,7 @@ model AdCampaign {
   platform     AdPlatform
   externalId   String
   name         String
-  status       String?    // ACTIVE/PAUSED/...
+  status       String? // ACTIVE/PAUSED/...
   objective    String?
   dailyBudget  Float?
   createdAt    DateTime   @default(now())
@@ -442,7 +466,7 @@ model AdInsightsDaily {
 model TrackingTouch {
   id          String   @id @default(cuid())
   orgId       String
-  visitorId   String   // из cookie (uuid), привязываем к форме при submit
+  visitorId   String // из cookie (uuid), привязываем к форме при submit
   landingUrl  String?  @db.Text
   referrer    String?  @db.Text
   utmSource   String?
@@ -467,23 +491,23 @@ model TrackingTouch {
 /// Связка CRM-сделки с tracking-touch и рекламной кампанией.
 /// Заполняется при получении webhook из CRM (ONCRMDEALADD) + матчинг по fbclid/gclid/email.
 model LeadAttribution {
-  id           String   @id @default(cuid())
-  orgId        String
+  id          String      @id @default(cuid())
+  orgId       String
   /// ID сделки в CRM (Bitrix deal ID, AmoCRM lead ID)
-  crmDealId    String
-  crmType      String
+  crmDealId   String
+  crmType     String
   /// Откуда пришло — FK на TrackingTouch (если смогли сматчить)
-  touchId      String?
+  touchId     String?
   /// К какой кампании привязано (если смогли)
-  campaignId   String?
-  platform     AdPlatform?
-  utmSource    String?
-  utmCampaign  String?
-  clickId      String?   // fbclid | ttclid | gclid
-  matchedBy    String?   // "fbclid" | "email" | "phone" | "utm"
-  confidence   Float     @default(1.0) // 0..1
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  campaignId  String?
+  platform    AdPlatform?
+  utmSource   String?
+  utmCampaign String?
+  clickId     String? // fbclid | ttclid | gclid
+  matchedBy   String? // "fbclid" | "email" | "phone" | "utm"
+  confidence  Float       @default(1.0) // 0..1
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
 
   @@unique([orgId, crmDealId, crmType])
   @@index([orgId, campaignId])

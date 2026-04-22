@@ -26,6 +26,15 @@ type Member = {
   isCurrent: boolean;
 };
 
+type Invite = {
+  id: string;
+  email: string;
+  role: Role;
+  createdAt: string;
+  expiresAt: string;
+  url: string;
+};
+
 const ROLE_LABEL: Record<Role, string> = {
   OWNER: "Владелец",
   ADMIN: "Администратор",
@@ -36,9 +45,11 @@ export function OrganizationPanel() {
   const router = useRouter();
   const [org, setOrg] = useState<OrgInfo | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [invites, setInvites] = useState<Invite[]>([]);
   const [myRole, setMyRole] = useState<Role | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Rename state
   const [nameDraft, setNameDraft] = useState("");
@@ -66,9 +77,10 @@ export function OrganizationPanel() {
       setOrg(current);
       setNameDraft(current.name);
 
-      const mRes = await fetch(`/api/orgs/${current.id}/members`, {
-        cache: "no-store",
-      });
+      const [mRes, iRes] = await Promise.all([
+        fetch(`/api/orgs/${current.id}/members`, { cache: "no-store" }),
+        fetch(`/api/orgs/${current.id}/invites`, { cache: "no-store" }),
+      ]);
       const mJson = (await mRes.json()) as {
         ok?: boolean;
         members?: Member[];
@@ -81,6 +93,14 @@ export function OrganizationPanel() {
       }
       setMembers(mJson.members ?? []);
       setMyRole(mJson.currentUserRole ?? current.role);
+
+      // Инвайты доступны только OWNER/ADMIN; 403 для VIEWER — молча игнорим.
+      if (iRes.ok) {
+        const iJson = (await iRes.json()) as { ok?: boolean; invites?: Invite[] };
+        if (iJson.ok) setInvites(iJson.invites ?? []);
+      } else {
+        setInvites([]);
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Ошибка загрузки");
     } finally {
@@ -123,21 +143,79 @@ export function OrganizationPanel() {
     setInviting(true);
     setInviteErr(null);
     try {
-      const r = await fetch(`/api/orgs/${org.id}/members`, {
+      // 1) Если пользователь уже в системе — добавим сразу как участника.
+      const direct = await fetch(`/api/orgs/${org.id}/members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, role: inviteRole }),
       });
-      const d = (await r.json()) as { ok?: boolean; member?: Member; error?: string };
-      if (!r.ok || !d.ok || !d.member) {
-        setInviteErr(d.error ?? "Не удалось добавить");
+      const directJson = (await direct.json()) as {
+        ok?: boolean;
+        member?: Member;
+        error?: string;
+      };
+      if (direct.ok && directJson.ok && directJson.member) {
+        setMembers((prev) => [...prev, directJson.member!]);
+        setInviteEmail("");
+        setInviteRole("VIEWER");
         return;
       }
-      setMembers((prev) => [...prev, d.member!]);
+
+      // 2) Пользователь ещё не зарегистрирован — создаём инвайт по токену.
+      const notFound =
+        direct.status === 400 && /не найден/i.test(directJson.error ?? "");
+      if (!notFound) {
+        setInviteErr(directJson.error ?? "Не удалось добавить");
+        return;
+      }
+
+      const inv = await fetch(`/api/orgs/${org.id}/invites`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, role: inviteRole }),
+      });
+      const invJson = (await inv.json()) as {
+        ok?: boolean;
+        invite?: Invite;
+        error?: string;
+      };
+      if (!inv.ok || !invJson.ok || !invJson.invite) {
+        setInviteErr(invJson.error ?? "Не удалось создать приглашение");
+        return;
+      }
+      setInvites((prev) => [
+        invJson.invite!,
+        ...prev.filter((x) => x.id !== invJson.invite!.id),
+      ]);
       setInviteEmail("");
       setInviteRole("VIEWER");
     } finally {
       setInviting(false);
+    }
+  }
+
+  async function revokeInvite(inviteId: string) {
+    if (!org) return;
+    if (!window.confirm("Отозвать приглашение?")) return;
+    const r = await fetch(`/api/orgs/${org.id}/invites/${inviteId}`, {
+      method: "DELETE",
+    });
+    const d = (await r.json()) as { ok?: boolean; error?: string };
+    if (!r.ok || !d.ok) {
+      setErr(d.error ?? "Не удалось отозвать приглашение");
+      return;
+    }
+    setInvites((prev) => prev.filter((i) => i.id !== inviteId));
+  }
+
+  async function copyInviteUrl(invite: Invite) {
+    try {
+      await navigator.clipboard.writeText(invite.url);
+      setCopiedId(invite.id);
+      setTimeout(() => setCopiedId((cur) => (cur === invite.id ? null : cur)), 1500);
+    } catch {
+      // Fallback: prompt пользователю скопировать руками
+      window.prompt("Скопируйте ссылку:", invite.url);
     }
   }
 
@@ -349,13 +427,43 @@ export function OrganizationPanel() {
               </p>
             ) : null}
             <p className="mt-2 text-[11px]" style={{ color: "var(--hint)" }}>
-              Пользователь должен быть уже зарегистрирован в системе.
+              Если email уже зарегистрирован — добавим сразу. Иначе создадим
+              приглашение по ссылке.
             </p>
           </div>
         ) : null}
 
+        {/* Pending invites */}
+        {canManage && invites.length > 0 ? (
+          <div className="mt-4">
+            <p
+              className="mb-2 text-[11px] font-medium uppercase tracking-wide"
+              style={{ color: "var(--hint)" }}
+            >
+              Отправленные приглашения ({invites.length})
+            </p>
+            <div className="space-y-2">
+              {invites.map((inv) => (
+                <InviteRow
+                  key={inv.id}
+                  invite={inv}
+                  copied={copiedId === inv.id}
+                  onCopy={copyInviteUrl}
+                  onRevoke={revokeInvite}
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {/* Members list */}
-        <div className="mt-4 space-y-2">
+        <p
+          className="mb-2 mt-4 text-[11px] font-medium uppercase tracking-wide"
+          style={{ color: "var(--hint)" }}
+        >
+          Участники
+        </p>
+        <div className="space-y-2">
           {members.map((m) => (
             <MemberRow
               key={m.userId}
@@ -367,6 +475,68 @@ export function OrganizationPanel() {
           ))}
         </div>
       </section>
+    </div>
+  );
+}
+
+function InviteRow({
+  invite,
+  copied,
+  onCopy,
+  onRevoke,
+}: {
+  invite: Invite;
+  copied: boolean;
+  onCopy: (invite: Invite) => void;
+  onRevoke: (id: string) => void;
+}) {
+  const expires = new Date(invite.expiresAt);
+  const expiresLabel = expires.toLocaleDateString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+  return (
+    <div
+      className="rounded-[12px] border p-3"
+      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p
+            className="truncate text-[13px] font-medium"
+            style={{ color: "var(--text)" }}
+          >
+            {invite.email}
+          </p>
+          <p className="text-[11px]" style={{ color: "var(--muted)" }}>
+            {ROLE_LABEL[invite.role]} · действует до {expiresLabel}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onCopy(invite)}
+          className="rounded-[8px] border px-2 py-1 text-[11px] transition-colors hover:bg-[rgba(255,255,255,0.06)]"
+          style={{ borderColor: "var(--border)", color: "var(--text)" }}
+        >
+          {copied ? "✓ Скопировано" : "Скопировать ссылку"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onRevoke(invite.id)}
+          className="rounded-[8px] px-2 py-1 text-[11px] transition-colors hover:bg-[rgba(255,255,255,0.06)]"
+          style={{ color: "var(--red)" }}
+        >
+          Отозвать
+        </button>
+      </div>
+      <p
+        className="mt-2 truncate text-[11px] font-mono"
+        style={{ color: "var(--hint)" }}
+        title={invite.url}
+      >
+        {invite.url}
+      </p>
     </div>
   );
 }

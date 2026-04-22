@@ -58,7 +58,7 @@ function clientIp(req: Request): string | null {
 export async function POST(req: Request) {
   try {
     const ip = clientIp(req) ?? "unknown";
-    const rl = rateLimit(`track:${ip}`, { limit: 60, windowMs: 60_000 });
+    const rl = await rateLimit(`track:${ip}`, { limit: 60, windowMs: 60_000 });
     if (!rl.allowed) {
       return NextResponse.json(
         { ok: false, error: "Too many requests" },

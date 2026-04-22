@@ -32,8 +32,11 @@ async function seedDemoCrm() {
     return;
   }
 
+  const { DEFAULT_ORG_ID } = await import("../src/lib/org/context");
+
   await prisma.crmConnection.create({
     data: {
+      orgId: DEFAULT_ORG_ID,
       crmType: "bitrix24",
       isActive: true,
       lastSyncAt: new Date(),
@@ -51,6 +54,7 @@ async function seedDemoCrm() {
       prisma.manager.create({
         data: {
           ...m,
+          orgId: DEFAULT_ORG_ID,
           crmType: "bitrix24",
         },
       }),

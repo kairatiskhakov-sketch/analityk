@@ -1,6 +1,7 @@
 import { OAuth2Client } from "google-auth-library";
 import { google } from "googleapis";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgId } from "@/lib/org/context";
 
 function sheetsClient(accessToken: string) {
   const auth = new OAuth2Client();
@@ -185,16 +186,17 @@ export async function importSalesPlans(
   spreadsheetId: string,
 ): Promise<{ imported: number }> {
   const rows = await readSalesPlansRange(accessToken, spreadsheetId);
+  const orgId = await resolveOrgId();
   let imported = 0;
 
   for (const r of rows) {
     const manager = await prisma.manager.findFirst({
-      where: { name: { contains: r.managerName, mode: "insensitive" } },
+      where: { orgId, name: { contains: r.managerName, mode: "insensitive" } },
     });
     const managerId = manager?.id ?? null;
 
     const existing = await prisma.salesPlan.findFirst({
-      where: { period: r.period, managerId },
+      where: { orgId, period: r.period, managerId },
     });
 
     if (existing) {
@@ -205,6 +207,7 @@ export async function importSalesPlans(
     } else {
       await prisma.salesPlan.create({
         data: {
+          orgId,
           period: r.period,
           managerId,
           target: r.target,

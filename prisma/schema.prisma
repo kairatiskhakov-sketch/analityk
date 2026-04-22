@@ -165,8 +165,7 @@ model VerificationToken {
 // --- CRM & integrations ---
 model CrmConnection {
   id         String    @id @default(cuid())
-  /// nullable на первом шаге миграции; бэкфилл через SQL; потом NOT NULL
-  orgId      String?
+  orgId      String
   crmType    String // "bitrix24" | "amocrm"
   /// Активное подключение per-org (в рамках одной org только одно isActive=true)
   isActive   Boolean   @default(false)
@@ -186,7 +185,7 @@ model CrmConnection {
   amoRefreshToken   String?
   amoTokenExpiresAt DateTime?
 
-  org            Organization?   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org            Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   pipelineStages PipelineStage[]
   dealPipelines  DealPipeline[]
 
@@ -197,7 +196,7 @@ model CrmConnection {
 /// Кеш справочников Bitrix (SOURCE, причины отказа и т.д.) для расшифровки ID
 model CrmDictionary {
   id         String   @id @default(cuid())
-  orgId      String?
+  orgId      String
   crmType    String
   entityId   String
   externalId String
@@ -206,7 +205,7 @@ model CrmDictionary {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  org Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@unique([orgId, crmType, entityId, externalId])
   @@index([orgId, crmType, entityId])
@@ -247,7 +246,7 @@ model PipelineStage {
 
 model GoogleConnection {
   id             String   @id @default(cuid())
-  orgId          String?
+  orgId          String
   email          String
   accessToken    String
   refreshToken   String
@@ -266,14 +265,14 @@ model GoogleConnection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  org Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@index([orgId])
 }
 
 model TelegramConnection {
   id       String  @id @default(cuid())
-  orgId    String?
+  orgId    String
   botToken String
   isActive Boolean @default(false)
 
@@ -284,7 +283,7 @@ model TelegramConnection {
   notifyPlanAlert   Boolean @default(true)
   dailyReportTime   String  @default("18:00")
 
-  org   Organization?  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org   Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
   chats TelegramChat[]
 
   @@index([orgId])
@@ -308,7 +307,7 @@ model TelegramChat {
 /// Кеш пользователей CRM (Bitrix user id → имя)
 model Manager {
   id         String  @id @default(cuid())
-  orgId      String?
+  orgId      String
   externalId String
   crmType    String
   name       String
@@ -316,7 +315,7 @@ model Manager {
   telegramId String?
   isActive   Boolean @default(true)
 
-  org         Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   planTargets PlanTarget[]
 
   @@unique([orgId, externalId, crmType])
@@ -325,29 +324,29 @@ model Manager {
 
 /// План продаж по периодам (команда и менеджеры)
 model PlanTarget {
-  id         String        @id @default(cuid())
-  orgId      String?
+  id         String       @id @default(cuid())
+  orgId      String
   period     String // "2026-04" | "2026-Q2" | "2026"
   periodType String // "month" | "quarter" | "year"
   managerId  String? // null = общий план на команду
   target     Float
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
-  manager    Manager?      @relation(fields: [managerId], references: [id], onDelete: Cascade)
-  org        Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  manager    Manager?     @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@unique([orgId, period, periodType, managerId])
   @@index([orgId])
 }
 
 model SalesPlan {
-  id        String        @id @default(cuid())
-  orgId     String?
+  id        String       @id @default(cuid())
+  orgId     String
   period    String
   managerId String?
   target    Float
-  createdAt DateTime      @default(now())
-  org       Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@index([orgId])
 }
@@ -355,7 +354,7 @@ model SalesPlan {
 /// Пользовательская классификация стадий сделок Bitrix24 для аналитики
 model StageConfig {
   id           String   @id @default(cuid())
-  orgId        String?
+  orgId        String
   externalId   String
   name         String
   pipelineId   String
@@ -367,7 +366,7 @@ model StageConfig {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  org Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@unique([orgId, externalId, crmType])
   @@index([orgId])

@@ -23,6 +23,7 @@ import { Card, CardHeader, PageTopBar } from "@/components/ui";
 import { GlobalFilters } from "@/components/ui/GlobalFilters";
 import type { Period } from "@/lib/dashboard/range";
 import { useModules } from "@/hooks/useModules";
+import { AdsRoiWidget } from "@/components/dashboard/AdsRoiWidget";
 
 const PIE_COLORS = [
   "var(--accent)",
@@ -697,6 +698,13 @@ export function DashboardClient({
                 )}
               </div>
             </Card>
+
+            {isEnabled("ads_roi") ? (
+              <AdsRoiWidget
+                dateFrom={sp.get("dateFrom") ?? dateFrom}
+                dateTo={sp.get("dateTo") ?? dateTo}
+              />
+            ) : null}
           </>
         ) : null}
       </div>

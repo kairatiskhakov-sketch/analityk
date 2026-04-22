@@ -15,6 +15,7 @@ export const MODULES = [
     default: true,
   },
   { key: "plan_progress", name: "Прогресс плана", page: "dashboard", default: true },
+  { key: "ads_roi", name: "ROI рекламы", page: "dashboard", default: true },
 
   { key: "managers_rating", name: "Рейтинг менеджеров", page: "managers", default: true },
   {

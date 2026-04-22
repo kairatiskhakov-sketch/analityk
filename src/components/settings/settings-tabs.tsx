@@ -8,6 +8,7 @@ import { DashboardModulesPanel } from "@/components/settings/dashboard-modules-p
 import { StageConfigPanel } from "@/components/settings/stage-config-panel";
 import { TrackingPanel } from "@/components/settings/tracking-panel";
 import { AdsPanel } from "@/components/settings/ads-panel";
+import { OrganizationPanel } from "@/components/settings/organization-panel";
 import {
   AmoIntegrationCard,
   GoogleIntegrationCard,
@@ -21,6 +22,7 @@ const TABS = [
   { key: "tracking", label: "Трекинг" },
   { key: "stages", label: "Воронки и этапы" },
   { key: "modules", label: "Модули дашборда" },
+  { key: "organization", label: "Организация" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -88,6 +90,7 @@ export function SettingsTabs({ crmStatus, bitrixInitial }: Props) {
         {tab === "tracking" ? <TrackingPanel /> : null}
         {tab === "stages" ? <StageConfigPanel /> : null}
         {tab === "modules" ? <DashboardModulesPanel /> : null}
+        {tab === "organization" ? <OrganizationPanel /> : null}
 
         <div className="glass max-w-2xl space-y-4 rounded-[18px] border p-5" style={{ borderColor: "var(--border)" }}>
           <p className="text-[13px]" style={{ color: "var(--muted)" }}>

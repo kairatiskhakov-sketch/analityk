@@ -1,6 +1,7 @@
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth/session";
+import { AuditAction, writeAudit } from "@/lib/org/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,14 @@ export async function PATCH(
     data: { role: nextRole },
   });
 
+  await writeAudit({
+    orgId: params.orgId,
+    actorUserId: user.id,
+    action: AuditAction.MEMBER_ROLE_CHANGED,
+    targetUserId: target.userId,
+    details: { from: target.role, to: nextRole },
+  });
+
   return jsonOk({
     member: {
       id: updated.id,
@@ -115,6 +124,14 @@ export async function DELETE(
   }
 
   await prisma.orgMember.delete({ where: { id: target.id } });
+
+  await writeAudit({
+    orgId: params.orgId,
+    actorUserId: user.id,
+    action: isSelf ? AuditAction.MEMBER_LEFT : AuditAction.MEMBER_REMOVED,
+    targetUserId: target.userId,
+    details: { role: target.role },
+  });
 
   // Если юзер удалил себя из текущей org — сбрасываем currentOrgId
   if (isSelf && user.currentOrgId === params.orgId) {

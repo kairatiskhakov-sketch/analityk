@@ -1,6 +1,7 @@
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth/session";
+import { AuditAction, writeAudit } from "@/lib/org/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +68,16 @@ export async function POST(
       select: { id: true, name: true, slug: true, plan: true },
     });
     return org;
+  });
+
+  await writeAudit({
+    orgId: invite.orgId,
+    actorUserId: user.id,
+    action: AuditAction.INVITE_ACCEPTED,
+    targetInviteId: invite.id,
+    targetUserId: user.id,
+    targetEmail: invite.email,
+    details: { role: invite.role, wasExisting: Boolean(existing) },
   });
 
   return jsonOk({

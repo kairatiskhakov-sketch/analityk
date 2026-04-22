@@ -9,6 +9,7 @@ import {
 } from "@/lib/org/invite-token";
 import { sendEmail } from "@/lib/email/send";
 import { buildInviteEmail } from "@/lib/email/templates/invite";
+import { AuditAction, writeAudit } from "@/lib/org/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -136,11 +137,28 @@ export async function POST(
       },
     });
     isNew = true;
+    await writeAudit({
+      orgId: params.orgId,
+      actorUserId: user.id,
+      action: AuditAction.INVITE_CREATED,
+      targetInviteId: invite.id,
+      targetEmail: invite.email,
+      details: { role: invite.role },
+    });
   } else if (invite.role !== role) {
     // Обновляем роль существующего инвайта, если попросили другую.
+    const prevRole = invite.role;
     invite = await prisma.orgInvite.update({
       where: { id: invite.id },
       data: { role },
+    });
+    await writeAudit({
+      orgId: params.orgId,
+      actorUserId: user.id,
+      action: AuditAction.INVITE_ROLE_CHANGED,
+      targetInviteId: invite.id,
+      targetEmail: invite.email,
+      details: { from: prevRole, to: invite.role },
     });
   }
 

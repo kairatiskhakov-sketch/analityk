@@ -1,6 +1,10 @@
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth/session";
+import { AuditAction, writeAudit } from "@/lib/org/audit";
+import { createLogger } from "@/lib/log/logger";
+
+const log = createLogger("org.lifecycle");
 
 export const dynamic = "force-dynamic";
 
@@ -31,10 +35,24 @@ export async function PATCH(
   if (!name) return jsonError("Укажите название");
   if (name.length > 120) return jsonError("Слишком длинное название");
 
+  const before = await prisma.organization.findUnique({
+    where: { id: params.orgId },
+    select: { name: true },
+  });
+
   const org = await prisma.organization.update({
     where: { id: params.orgId },
     data: { name },
   });
+
+  if (before?.name !== org.name) {
+    await writeAudit({
+      orgId: params.orgId,
+      actorUserId: user.id,
+      action: AuditAction.ORG_RENAMED,
+      details: { from: before?.name ?? null, to: org.name },
+    });
+  }
 
   return jsonOk({ org: { id: org.id, name: org.name, slug: org.slug, plan: org.plan } });
 }
@@ -80,6 +98,15 @@ export async function DELETE(
       400,
     );
   }
+
+  // OrgAudit каскадно удалится вместе с организацией — пишем событие удаления
+  // в структурированный лог (а не в OrgAudit), чтобы оно сохранилось.
+  log.info("deleted", {
+    action: AuditAction.ORG_DELETED,
+    orgId: org.id,
+    slug: org.slug,
+    actorUserId: user.id,
+  });
 
   await prisma.$transaction([
     prisma.user.updateMany({

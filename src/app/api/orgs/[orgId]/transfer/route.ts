@@ -1,6 +1,7 @@
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth/session";
+import { AuditAction, writeAudit } from "@/lib/org/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,14 @@ export async function POST(
   }
 
   await prisma.$transaction(ops);
+
+  await writeAudit({
+    orgId: params.orgId,
+    actorUserId: user.id,
+    action: AuditAction.OWNERSHIP_TRANSFERRED,
+    targetUserId,
+    details: { demoteSelf, previousTargetRole: target.role },
+  });
 
   return jsonOk({
     ok: true,

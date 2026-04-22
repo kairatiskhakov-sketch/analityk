@@ -1,6 +1,7 @@
 import { jsonError, jsonOk } from "@/lib/http/json";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth/session";
+import { AuditAction, writeAudit } from "@/lib/org/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,14 @@ export async function DELETE(
     await prisma.orgInvite.update({
       where: { id: invite.id },
       data: { revokedAt: new Date() },
+    });
+    await writeAudit({
+      orgId: params.orgId,
+      actorUserId: user.id,
+      action: AuditAction.INVITE_REVOKED,
+      targetInviteId: invite.id,
+      targetEmail: invite.email,
+      details: { role: invite.role },
     });
   }
 

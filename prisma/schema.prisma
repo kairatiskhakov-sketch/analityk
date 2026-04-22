@@ -32,6 +32,7 @@ model Organization {
 
   members             OrgMember[]
   invites             OrgInvite[]
+  audits              OrgAudit[]
   crmConnections      CrmConnection[]
   googleConnections   GoogleConnection[]
   telegramConnections TelegramConnection[]
@@ -43,6 +44,30 @@ model Organization {
 
   @@index([slug])
   @@index([trackingKey])
+}
+
+/// Журнал действий над организацией (audit log).
+/// Пишется best-effort из мутирующих эндпоинтов. Не должен валить операцию.
+/// При удалении Organization — каскадно уничтожается (OrgAudit живёт в scope org).
+model OrgAudit {
+  id             String   @id @default(cuid())
+  orgId          String
+  /// null для системных действий (cron, scheduler, миграции)
+  actorUserId    String?
+  /// имя действия в dot.case: "invite.created", "member.role_changed", ...
+  action         String
+  targetUserId   String?
+  targetEmail    String?
+  targetInviteId String?
+  /// произвольные поля (beforeRole, afterRole, reason, ...)
+  details        Json?
+  createdAt      DateTime @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, createdAt])
+  @@index([actorUserId])
+  @@index([targetUserId])
 }
 
 /// Приглашение в организацию по токену. Отправляется пользователю,

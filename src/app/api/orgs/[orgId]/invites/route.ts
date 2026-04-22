@@ -7,6 +7,8 @@ import {
   generateInviteToken,
   normalizeEmail,
 } from "@/lib/org/invite-token";
+import { sendEmail } from "@/lib/email/send";
+import { buildInviteEmail } from "@/lib/email/templates/invite";
 
 export const dynamic = "force-dynamic";
 
@@ -121,6 +123,7 @@ export async function POST(
   });
 
   let invite = active;
+  let isNew = false;
   if (!invite) {
     invite = await prisma.orgInvite.create({
       data: {
@@ -132,6 +135,7 @@ export async function POST(
         expiresAt: new Date(Date.now() + INVITE_TTL_MS),
       },
     });
+    isNew = true;
   } else if (invite.role !== role) {
     // Обновляем роль существующего инвайта, если попросили другую.
     invite = await prisma.orgInvite.update({
@@ -140,7 +144,39 @@ export async function POST(
     });
   }
 
+  // Отправляем письмо с ссылкой. Фолбэк — лог в консоль, если RESEND_API_KEY
+  // не сконфигурирован. Ошибки не блокируют ответ — ссылка всё равно вернётся.
   const origin = new URL(req.url).origin;
+  const inviteUrl = buildInviteUrl(invite.token, origin);
+
+  let emailSent: boolean | null = null;
+  let emailError: string | null = null;
+  if (isNew || invite.role !== active?.role) {
+    const org = await prisma.organization.findUnique({
+      where: { id: params.orgId },
+      select: { name: true },
+    });
+    const tpl = buildInviteEmail({
+      orgName: org?.name ?? "организацию",
+      inviterName: user.name ?? user.email,
+      role: invite.role,
+      url: inviteUrl,
+      expiresAt: invite.expiresAt,
+    });
+    const result = await sendEmail({
+      to: invite.email,
+      subject: tpl.subject,
+      html: tpl.html,
+      text: tpl.text,
+    });
+    if (result.ok) {
+      emailSent = result.skipped ? false : true;
+    } else {
+      emailSent = false;
+      emailError = result.error;
+    }
+  }
+
   return jsonOk({
     invite: {
       id: invite.id,
@@ -148,7 +184,9 @@ export async function POST(
       role: invite.role,
       createdAt: invite.createdAt.toISOString(),
       expiresAt: invite.expiresAt.toISOString(),
-      url: buildInviteUrl(invite.token, origin),
+      url: inviteUrl,
     },
+    emailSent,
+    emailError,
   });
 }

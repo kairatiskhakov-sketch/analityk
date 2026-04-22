@@ -60,6 +60,7 @@ export function OrganizationPanel() {
   const [inviteRole, setInviteRole] = useState<Role>("VIEWER");
   const [inviting, setInviting] = useState(false);
   const [inviteErr, setInviteErr] = useState<string | null>(null);
+  const [inviteNotice, setInviteNotice] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setErr(null);
@@ -142,6 +143,7 @@ export function OrganizationPanel() {
     if (!email) return;
     setInviting(true);
     setInviteErr(null);
+    setInviteNotice(null);
     try {
       // 1) Если пользователь уже в системе — добавим сразу как участника.
       const direct = await fetch(`/api/orgs/${org.id}/members`, {
@@ -177,6 +179,8 @@ export function OrganizationPanel() {
       const invJson = (await inv.json()) as {
         ok?: boolean;
         invite?: Invite;
+        emailSent?: boolean | null;
+        emailError?: string | null;
         error?: string;
       };
       if (!inv.ok || !invJson.ok || !invJson.invite) {
@@ -187,6 +191,17 @@ export function OrganizationPanel() {
         invJson.invite!,
         ...prev.filter((x) => x.id !== invJson.invite!.id),
       ]);
+      if (invJson.emailSent === true) {
+        setInviteNotice(`Приглашение отправлено на ${invJson.invite.email}`);
+      } else if (invJson.emailError) {
+        setInviteNotice(
+          `Не удалось отправить письмо (${invJson.emailError}). Скопируйте ссылку ниже.`,
+        );
+      } else {
+        setInviteNotice(
+          "Email-провайдер не настроен — скопируйте ссылку из списка ниже.",
+        );
+      }
       setInviteEmail("");
       setInviteRole("VIEWER");
     } finally {
@@ -424,6 +439,18 @@ export function OrganizationPanel() {
                 style={{ color: "var(--red)" }}
               >
                 {inviteErr}
+              </p>
+            ) : null}
+            {inviteNotice ? (
+              <p
+                className="mt-2 rounded-[8px] border px-2 py-1.5 text-[12px]"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--bg)",
+                  color: "var(--text)",
+                }}
+              >
+                {inviteNotice}
               </p>
             ) : null}
             <p className="mt-2 text-[11px]" style={{ color: "var(--hint)" }}>

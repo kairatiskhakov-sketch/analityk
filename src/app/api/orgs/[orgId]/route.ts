@@ -38,3 +38,56 @@ export async function PATCH(
 
   return jsonOk({ org: { id: org.id, name: org.name, slug: org.slug, plan: org.plan } });
 }
+
+/**
+ * DELETE /api/orgs/:orgId — удалить организацию. Только OWNER.
+ * Защита от мискликов: body `{ confirmSlug }` должен совпадать со slug org.
+ * Каскад (FK onDelete: Cascade в schema.prisma) сносит все tenant-таблицы.
+ * User.currentOrgId не имеет FK — нулим вручную у всех, у кого он указывал сюда.
+ */
+export async function DELETE(
+  req: Request,
+  { params }: { params: { orgId: string } },
+) {
+  const user = await getSessionUser();
+  if (!user) return jsonError("Не авторизован", 401);
+
+  const membership = await prisma.orgMember.findUnique({
+    where: { orgId_userId: { orgId: params.orgId, userId: user.id } },
+  });
+  if (!membership) return jsonError("Нет доступа", 403);
+  if (membership.role !== "OWNER") {
+    return jsonError("Только владелец может удалить организацию", 403);
+  }
+
+  let body: { confirmSlug?: string } = {};
+  try {
+    body = (await req.json().catch(() => ({}))) as typeof body;
+  } catch {
+    body = {};
+  }
+
+  const org = await prisma.organization.findUnique({
+    where: { id: params.orgId },
+    select: { id: true, slug: true },
+  });
+  if (!org) return jsonError("Организация не найдена", 404);
+
+  const confirm = body.confirmSlug?.trim();
+  if (!confirm || confirm !== org.slug) {
+    return jsonError(
+      "Подтверждение не совпадает: передайте confirmSlug равный slug организации",
+      400,
+    );
+  }
+
+  await prisma.$transaction([
+    prisma.user.updateMany({
+      where: { currentOrgId: params.orgId },
+      data: { currentOrgId: null },
+    }),
+    prisma.organization.delete({ where: { id: params.orgId } }),
+  ]);
+
+  return jsonOk({ ok: true, deleted: { id: org.id, slug: org.slug } });
+}

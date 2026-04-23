@@ -62,6 +62,18 @@ export function OrganizationPanel() {
   const [inviteErr, setInviteErr] = useState<string | null>(null);
   const [inviteNotice, setInviteNotice] = useState<string | null>(null);
 
+  // Attribution backfill state (OWNER-only, дорогая операция)
+  const [backfillLimit, setBackfillLimit] = useState(500);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<null | {
+    ok: boolean;
+    scanned?: number;
+    matched?: number;
+    unchanged?: number;
+    errors?: number;
+    error?: string;
+  }>(null);
+
   const reload = useCallback(async () => {
     setErr(null);
     setLoading(true);
@@ -247,6 +259,48 @@ export function OrganizationPanel() {
       return;
     }
     setMembers((prev) => prev.map((m) => (m.userId === userId ? { ...m, role } : m)));
+  }
+
+  async function runBackfill() {
+    if (!org || backfilling) return;
+    const limit = Math.min(Math.max(Math.trunc(backfillLimit) || 0, 1), 2000);
+    setBackfilling(true);
+    setBackfillResult(null);
+    try {
+      const r = await fetch(`/api/orgs/${org.id}/attribution/backfill`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit }),
+      });
+      const d = (await r.json()) as {
+        ok?: boolean;
+        result?: {
+          scanned?: number;
+          matched?: number;
+          unchanged?: number;
+          errors?: number;
+        };
+        error?: string;
+      };
+      if (!r.ok || !d.ok) {
+        setBackfillResult({ ok: false, error: d.error ?? "Не удалось запустить" });
+        return;
+      }
+      setBackfillResult({
+        ok: true,
+        scanned: d.result?.scanned,
+        matched: d.result?.matched,
+        unchanged: d.result?.unchanged,
+        errors: d.result?.errors,
+      });
+    } catch (e) {
+      setBackfillResult({
+        ok: false,
+        error: e instanceof Error ? e.message : "Ошибка сети",
+      });
+    } finally {
+      setBackfilling(false);
+    }
   }
 
   async function removeMember(userId: string, isSelf: boolean) {
@@ -502,6 +556,95 @@ export function OrganizationPanel() {
           ))}
         </div>
       </section>
+
+      {/* Атрибуция: дорогая операция — только OWNER */}
+      {isOwner ? (
+        <section
+          className="glass max-w-2xl rounded-[18px] border p-5"
+          style={{ borderColor: "var(--border)" }}
+        >
+          <h2
+            className="text-[15px] font-semibold"
+            style={{ color: "var(--text)" }}
+          >
+            Атрибуция
+          </h2>
+          <p className="mt-0.5 text-[12px]" style={{ color: "var(--muted)" }}>
+            Перепривязка сделок к рекламным касаниям для ранее не
+            обработанных лидов. Тяжёлая операция — запускайте только при
+            необходимости.
+          </p>
+
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="flex-1">
+              <label
+                className="mb-1 block text-[11px] font-medium uppercase tracking-wide"
+                style={{ color: "var(--hint)" }}
+              >
+                Лимит за запуск
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={2000}
+                value={backfillLimit}
+                onChange={(e) =>
+                  setBackfillLimit(Number.parseInt(e.target.value, 10) || 0)
+                }
+                disabled={backfilling}
+                className="w-full rounded-[10px] border px-3 py-2 text-[13px] outline-none disabled:opacity-60"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                  color: "var(--text)",
+                }}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={runBackfill}
+              disabled={backfilling || backfillLimit < 1}
+              className="rounded-[10px] px-4 py-2 text-[13px] font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
+              style={{
+                background: "linear-gradient(135deg, #7B5CF5, #E040FB)",
+                color: "#fff",
+              }}
+            >
+              {backfilling ? "Идёт перепривязка…" : "Запустить перепривязку"}
+            </button>
+          </div>
+
+          <p className="mt-2 text-[11px]" style={{ color: "var(--hint)" }}>
+            До 2000 записей за раз. Бэкэнд берёт первое активное подключение
+            CRM и ходит в него для каждой сделки.
+          </p>
+
+          {backfillResult ? (
+            backfillResult.ok ? (
+              <p
+                className="mt-3 rounded-[10px] border px-3 py-2 text-[12px]"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                  color: "var(--text)",
+                }}
+              >
+                Готово: просканировано {backfillResult.scanned ?? 0},
+                привязано {backfillResult.matched ?? 0}, без изменений{" "}
+                {backfillResult.unchanged ?? 0}, ошибок{" "}
+                {backfillResult.errors ?? 0}.
+              </p>
+            ) : (
+              <p
+                className="mt-3 rounded-[10px] border px-3 py-2 text-[12px]"
+                style={{ borderColor: "var(--red)", color: "var(--red)" }}
+              >
+                {backfillResult.error}
+              </p>
+            )
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }

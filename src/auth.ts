@@ -1,6 +1,6 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-import type { Role } from "@prisma/client";
+import type { Role, UserStatus } from "@prisma/client";
 
 function initialsFromName(name: string) {
   return name
@@ -39,10 +39,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           id: string;
           role: Role;
           initials?: string | null;
+          status?: UserStatus;
+          isPlatformAdmin?: boolean;
         };
         token.role = u.role;
         token.id = u.id;
         token.initials = u.initials ?? initialsFromName(user.name ?? "");
+        token.status = u.status ?? "ACTIVE";
+        token.isPlatformAdmin = u.isPlatformAdmin ?? false;
 
         // Resolve org on sign-in: prefer user's currentOrgId, else first membership.
         try {
@@ -65,17 +69,25 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }
       }
 
-      // Refresh currentOrgId when client calls update() (e.g. org switcher).
+      // Refresh from DB when client calls update() (org switcher / status change).
       if (trigger === "update" && token.id) {
         try {
           const { prisma } = await import("@/lib/prisma");
           const dbUser = await prisma.user.findUnique({
             where: { id: token.id as string },
-            select: { currentOrgId: true },
+            select: {
+              currentOrgId: true,
+              status: true,
+              isPlatformAdmin: true,
+            },
           });
           token.currentOrgId = dbUser?.currentOrgId ?? null;
+          if (dbUser) {
+            token.status = dbUser.status;
+            token.isPlatformAdmin = dbUser.isPlatformAdmin;
+          }
         } catch {
-          /* keep previous value */
+          /* keep previous values */
         }
       }
 
@@ -88,6 +100,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         session.user.initials = (token.initials as string) ?? "";
         session.user.currentOrgId =
           (token.currentOrgId as string | null | undefined) ?? null;
+        session.user.status =
+          (token.status as UserStatus | undefined) ?? "ACTIVE";
+        session.user.isPlatformAdmin =
+          (token.isPlatformAdmin as boolean | undefined) ?? false;
       }
       return session;
     },

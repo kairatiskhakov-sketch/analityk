@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { generateTrackingKey } from "@/lib/tracking/key";
+import { sendEmail } from "@/lib/email/send";
+import { buildAdminNewRegistrationEmail } from "@/lib/email/templates/admin-new-registration";
+import { getPlatformAdminEmails } from "@/lib/admin/platform-admin";
+import { writePlatformAudit, PlatformAuditAction } from "@/lib/admin/audit";
 
 function initialsFromName(name: string) {
   return name
@@ -50,6 +54,17 @@ async function uniqueOrgSlug(base: string): Promise<string> {
   return `${base}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
+function getPublicBaseUrl(req: Request): string {
+  const env = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (env) return env.replace(/\/+$/, "");
+  try {
+    const u = new URL(req.url);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "";
+  }
+}
+
 export async function POST(req: Request) {
   let body: { name?: string; email?: string; password?: string; orgName?: string };
   try {
@@ -94,6 +109,7 @@ export async function POST(req: Request) {
         email: emailNorm,
         password: hashed,
         initials,
+        // status: PENDING — берётся из дефолта схемы.
       },
     });
 
@@ -122,10 +138,42 @@ export async function POST(req: Request) {
     return { user, org };
   });
 
+  // Audit + email — best-effort, не блокирует ответ
+  void writePlatformAudit({
+    actorId: result.user.id,
+    action: PlatformAuditAction.USER_REGISTERED,
+    targetId: result.user.id,
+    details: { orgId: result.org.id, orgSlug: result.org.slug },
+  });
+
+  const adminEmails = getPlatformAdminEmails();
+  if (adminEmails.length > 0) {
+    const baseUrl = getPublicBaseUrl(req);
+    const reviewUrl = baseUrl
+      ? `${baseUrl}/admin/users/${result.user.id}`
+      : `/admin/users/${result.user.id}`;
+    const tpl = buildAdminNewRegistrationEmail({
+      userName: result.user.name,
+      userEmail: result.user.email,
+      orgName: result.org.name,
+      reviewUrl,
+      registeredAt: new Date(),
+    });
+    for (const adminEmail of adminEmails) {
+      void sendEmail({
+        to: adminEmail,
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+      });
+    }
+  }
+
   return NextResponse.json({
     id: result.user.id,
     name: result.user.name,
     email: result.user.email,
     org: { id: result.org.id, name: result.org.name, slug: result.org.slug },
+    status: "PENDING",
   });
 }

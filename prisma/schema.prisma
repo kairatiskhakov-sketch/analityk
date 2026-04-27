@@ -18,6 +18,16 @@ enum OrgRole {
   VIEWER
 }
 
+/// Платформенный статус учётной записи (гейт на входе в приложение).
+/// - PENDING: зарегистрировался, ждёт одобрения super-admin'а
+/// - ACTIVE: одобрен, полный доступ
+/// - BLOCKED: заблокирован, вход запрещён
+enum UserStatus {
+  PENDING
+  ACTIVE
+  BLOCKED
+}
+
 /// Тенант. Каждая подключённая компания = одна Organization.
 /// Все CRM/рекламные интеграции, менеджеры, планы, настройки — внутри неё.
 model Organization {
@@ -126,11 +136,46 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  /// Платформенный статус (PENDING/ACTIVE/BLOCKED). Новые регистрации → PENDING.
+  /// Существующие пользователи в миграции получают ACTIVE.
+  status          UserStatus @default(PENDING)
+  /// Super-admin флаг. Автопроставляется при логине email'а из PLATFORM_ADMIN_EMAILS.
+  isPlatformAdmin Boolean    @default(false)
+  lastLoginAt     DateTime?
+  approvedAt      DateTime?
+  approvedById    String?
+  blockedAt       DateTime?
+  blockedById     String?
+  blockReason     String?
+
   accounts         Account[]
   sessions         Session[]
   telegramChats    TelegramChat[]
   dashboardModules DashboardModule[]
   orgMemberships   OrgMember[]
+
+  @@index([status])
+  @@index([isPlatformAdmin])
+}
+
+/// Платформенный журнал аудита (действия super-admin'ов).
+/// Отдельная таблица, не привязанная к Organization — это кросс-организационный
+/// уровень: approve/block/grant/revoke admin и т.п.
+model PlatformAudit {
+  id        String   @id @default(cuid())
+  /// userId того, кто выполнил действие (null = системное)
+  actorId   String?
+  /// dot.case: user.approved | user.blocked | user.unblocked | admin.granted | admin.revoked
+  action    String
+  /// userId цели действия (опционально)
+  targetId  String?
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([targetId])
+  @@index([actorId])
 }
 
 /// Включённые блоки дашборда на пользователя

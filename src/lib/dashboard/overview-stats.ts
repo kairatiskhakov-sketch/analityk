@@ -44,7 +44,7 @@ export type DashboardOverview = {
     lost: DealFinancialSlice;
   };
   failReasons: { name: string; count: number }[];
-  sources: { name: string; count: number }[];
+  sources: { name: string; count: number; sum: number }[];
 };
 
 function topSevenPlusOther(
@@ -55,6 +55,19 @@ function topSevenPlusOther(
   const rest = sorted.slice(7).reduce((s, x) => s + x.count, 0);
   if (rest > 0) {
     top.push({ name: "Другое", count: rest });
+  }
+  return top;
+}
+
+function topSevenPlusOtherWithSum(
+  entries: { name: string; count: number; sum: number }[],
+): { name: string; count: number; sum: number }[] {
+  const sorted = [...entries].sort((a, b) => b.count - a.count);
+  const top = sorted.slice(0, 7);
+  const restCount = sorted.slice(7).reduce((s, x) => s + x.count, 0);
+  const restSum = sorted.slice(7).reduce((s, x) => s + x.sum, 0);
+  if (restCount > 0) {
+    top.push({ name: "Другое", count: restCount, sum: restSum });
   }
   return top;
 }
@@ -173,17 +186,21 @@ export async function getDashboardOverview(
 
   // Учитываем только сделки с заполненным SOURCE_ID (у ~97% сделок портала он пуст —
   // это не «Другое», а отсутствие источника)
-  const srcRaw = new Map<string, number>();
+  const srcRaw = new Map<string, { count: number; sum: number }>();
   for (const d of scopedDeals) {
     const raw = (d.SOURCE_ID ?? "").toString().trim();
     if (!raw) continue;
     const label = resolveBitrixSourceLabel(d.SOURCE_ID, srcMap);
-    srcRaw.set(label, (srcRaw.get(label) ?? 0) + 1);
+    const cur = srcRaw.get(label) ?? { count: 0, sum: 0 };
+    cur.count += 1;
+    cur.sum += parseOpportunity(d.OPPORTUNITY);
+    srcRaw.set(label, cur);
   }
-  const sources = topSevenPlusOther(
-    Array.from(srcRaw.entries()).map(([name, count]) => ({
+  const sources = topSevenPlusOtherWithSum(
+    Array.from(srcRaw.entries()).map(([name, v]) => ({
       name,
-      count,
+      count: v.count,
+      sum: v.sum,
     })),
   );
 

@@ -24,6 +24,7 @@ import { GlobalFilters } from "@/components/ui/GlobalFilters";
 import type { Period } from "@/lib/dashboard/range";
 import { useModules } from "@/hooks/useModules";
 import { AdsRoiWidget } from "@/components/dashboard/AdsRoiWidget";
+import { HeatmapDayHour } from "@/components/dashboard/HeatmapDayHour";
 
 const PIE_COLORS = [
   "var(--accent)",
@@ -69,6 +70,18 @@ export function DashboardClient({
   const [fails, setFails] = useState<{ reason: string; count: number }[]>([]);
   const [failsSource, setFailsSource] = useState<"leads" | "deals" | null>(null);
   const [failsWarning, setFailsWarning] = useState<string | null>(null);
+  const [sourceMetric, setSourceMetric] = useState<"count" | "sum">("count");
+  const [heatmap, setHeatmap] = useState<{
+    leads: number[][];
+    deals: number[][];
+    leadsTotal: number;
+    dealsTotal: number;
+  } | null>(null);
+  const [heatmapView, setHeatmapView] = useState<"leads" | "deals">("leads");
+  const [extraMetrics, setExtraMetrics] = useState<{
+    avgCloseDays: number;
+    staleLeads: number;
+  } | null>(null);
 
   const qData = useMemo(() => {
     const q = new URLSearchParams({
@@ -90,12 +103,14 @@ export function DashboardClient({
     (async () => {
       setLoadError(null);
       try {
-        const [oRes, fRes, cRes, mRes, failsRes] = await Promise.all([
+        const [oRes, fRes, cRes, mRes, failsRes, hRes, mxRes] = await Promise.all([
           fetch(`/api/dashboard/overview?${qData}`, { cache: "no-store" }),
           fetch(`/api/dashboard/funnels?${qData}`, { cache: "no-store" }),
           fetch(`/api/dashboard/chart?${qData}`, { cache: "no-store" }),
           fetch(`/api/managers?${qData}`, { cache: "no-store" }),
           fetch(`/api/leads/fails?${qData}`, { cache: "no-store" }),
+          fetch(`/api/dashboard/heatmap?${qData}`, { cache: "no-store" }),
+          fetch(`/api/dashboard/metrics?${qData}`, { cache: "no-store" }),
         ]);
         const oj = (await oRes.json()) as {
           overview?: DashboardOverview | null;
@@ -113,6 +128,18 @@ export function DashboardClient({
           fails?: { reason: string; count: number }[];
           source?: "leads" | "deals";
           warning?: string;
+        };
+        const hj = (await hRes.json()) as {
+          leads?: number[][];
+          deals?: number[][];
+          leadsTotal?: number;
+          dealsTotal?: number;
+        };
+        const mxj = (await mxRes.json()) as {
+          metrics?: {
+            avgCloseDays?: number;
+            staleLeads?: number;
+          } | null;
         };
         if (!cancelled) {
           if (!oRes.ok) {
@@ -138,6 +165,24 @@ export function DashboardClient({
           setFails(failsJson.fails ?? []);
           setFailsSource(failsJson.source ?? null);
           setFailsWarning(failsJson.warning ?? null);
+          if (hj.leads && hj.deals) {
+            setHeatmap({
+              leads: hj.leads,
+              deals: hj.deals,
+              leadsTotal: hj.leadsTotal ?? 0,
+              dealsTotal: hj.dealsTotal ?? 0,
+            });
+          } else {
+            setHeatmap(null);
+          }
+          if (mxj.metrics) {
+            setExtraMetrics({
+              avgCloseDays: mxj.metrics.avgCloseDays ?? 0,
+              staleLeads: mxj.metrics.staleLeads ?? 0,
+            });
+          } else {
+            setExtraMetrics(null);
+          }
 
           const prevParams = new URLSearchParams(qData);
           const curFrom = new Date((sp.get("dateFrom") ?? dateFrom) + "T00:00:00");
@@ -174,6 +219,8 @@ export function DashboardClient({
           setFails([]);
           setFailsSource(null);
           setFailsWarning(null);
+          setHeatmap(null);
+          setExtraMetrics(null);
         }
       }
     })();
@@ -239,7 +286,13 @@ export function DashboardClient({
   const failPie = overview?.failReasons?.length
     ? overview.failReasons.map((x) => ({ name: x.name, value: x.count }))
     : fails.map((x) => ({ name: x.reason, value: x.count }));
-  const srcPie = overview?.sources?.map((x) => ({ name: x.name, value: x.count })) ?? [];
+  const srcPie =
+    overview?.sources?.map((x) => ({
+      name: x.name,
+      value: sourceMetric === "sum" ? x.sum : x.count,
+      count: x.count,
+      sum: x.sum,
+    })) ?? [];
   const totalLeads = overview?.leads.total ?? 0;
   const totalClosed = overview?.deals.won.count ?? 0;
   const totalSales = overview?.deals.won.sum ?? 0;
@@ -375,7 +428,7 @@ export function DashboardClient({
 
         {overview && hasCrm ? (
           <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
               <Card>
                 <div className="p-4">
                   <p className="text-[11px]" style={{ color: "var(--hint)" }}>Лидов получено</p>
@@ -453,6 +506,24 @@ export function DashboardClient({
                   <p className="mt-1 text-[24px] font-semibold">{formatNumber(leadsToday)}</p>
                 </div>
               </Card>
+              <Card>
+                <div className="p-4">
+                  <p className="text-[11px]" style={{ color: "var(--hint)" }}>Сред. длит. сделки</p>
+                  <p className="mt-1 text-[24px] font-semibold">
+                    {extraMetrics ? formatNumber(extraMetrics.avgCloseDays) : "—"}
+                  </p>
+                  <p className="text-[12px]" style={{ color: "var(--muted)" }}>дней от лида до закрытия</p>
+                </div>
+              </Card>
+              <Card>
+                <div className="p-4">
+                  <p className="text-[11px]" style={{ color: "var(--hint)" }}>Зависшие сделки</p>
+                  <p className="mt-1 text-[24px] font-semibold" style={{ color: extraMetrics && extraMetrics.staleLeads > 0 ? "var(--amber)" : "var(--text)" }}>
+                    {extraMetrics ? formatNumber(extraMetrics.staleLeads) : "—"}
+                  </p>
+                  <p className="text-[12px]" style={{ color: "var(--muted)" }}>без движения &gt; 3 дней</p>
+                </div>
+              </Card>
             </div>
 
             <Card className="min-h-80">
@@ -473,13 +544,101 @@ export function DashboardClient({
               </div>
             </Card>
 
+            <Card className="module-enter">
+              <div className="flex items-start justify-between gap-3 px-4 pt-4">
+                <div>
+                  <h3 className="text-[14px] font-semibold" style={{ color: "var(--text)" }}>
+                    Активность по дням и часам
+                  </h3>
+                  <p className="mt-0.5 text-[11px]" style={{ color: "var(--muted)" }}>
+                    {heatmapView === "leads"
+                      ? "когда поступают новые лиды (день недели × час)"
+                      : "когда закрываются сделки (день недели × час)"}
+                  </p>
+                </div>
+                <div
+                  className="flex items-center gap-1 rounded-[8px] border p-0.5 text-[11px]"
+                  style={{ borderColor: "var(--border2)", background: "var(--surface2)" }}
+                >
+                  {(["leads", "deals"] as const).map((v) => {
+                    const active = heatmapView === v;
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setHeatmapView(v)}
+                        className="rounded-[6px] px-2 py-1 transition-colors"
+                        style={{
+                          background: active ? "var(--surface)" : "transparent",
+                          color: active ? "var(--text)" : "var(--muted)",
+                        }}
+                      >
+                        {v === "leads" ? "Лиды" : "Сделки"}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {heatmap ? (
+                <HeatmapDayHour
+                  data={heatmapView === "leads" ? heatmap.leads : heatmap.deals}
+                  total={heatmapView === "leads" ? heatmap.leadsTotal : heatmap.dealsTotal}
+                  emptyHint={
+                    heatmapView === "leads"
+                      ? "Нет лидов за период"
+                      : "Нет закрытых сделок за период"
+                  }
+                  accent={heatmapView === "leads" ? "#4C8DFF" : "var(--accent)"}
+                />
+              ) : (
+                <p className="px-4 py-8 text-center text-[12px]" style={{ color: "var(--hint)" }}>
+                  Загрузка…
+                </p>
+              )}
+            </Card>
+
             <div className="grid gap-4 lg:grid-cols-2">
               <Card className="module-enter min-w-0">
-                <CardHeader
-                  title={`Источники (${srcPie.reduce((s, x) => s + x.value, 0)})`}
-                  sub="реальные из CRM"
-                />
-                <div className="flex flex-col items-center px-4 pb-4">
+                <div className="flex items-start justify-between gap-3 px-4 pt-3 pb-2">
+                  <div>
+                    <h3 className="text-[14px] font-semibold" style={{ color: "var(--text)" }}>
+                      Источники
+                      {srcPie.length > 0 ? (
+                        <span style={{ color: "var(--hint)", marginLeft: 6, fontWeight: 400 }}>
+                          {sourceMetric === "count"
+                            ? `(${formatNumber(srcPie.reduce((s, x) => s + x.count, 0))})`
+                            : `(${formatCurrency(srcPie.reduce((s, x) => s + x.sum, 0))} ₸)`}
+                        </span>
+                      ) : null}
+                    </h3>
+                    <p className="mt-0.5 text-[11px]" style={{ color: "var(--muted)" }}>
+                      {sourceMetric === "count" ? "по количеству сделок" : "по сумме продаж"}
+                    </p>
+                  </div>
+                  <div
+                    className="flex items-center gap-1 rounded-[8px] border p-0.5 text-[11px]"
+                    style={{ borderColor: "var(--border2)", background: "var(--surface2)" }}
+                  >
+                    {(["count", "sum"] as const).map((v) => {
+                      const active = sourceMetric === v;
+                      return (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setSourceMetric(v)}
+                          className="rounded-[6px] px-2 py-1 transition-colors"
+                          style={{
+                            background: active ? "var(--surface)" : "transparent",
+                            color: active ? "var(--text)" : "var(--muted)",
+                          }}
+                        >
+                          {v === "count" ? "Кол-во" : "Сумма"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="flex flex-col items-center px-4 pb-4 pt-2">
                   {srcPie.length ? (
                     <>
                       <div className="h-52 w-full">
@@ -510,7 +669,12 @@ export function DashboardClient({
                               style={{ background: PIE_COLORS[idx % PIE_COLORS.length] }}
                             />
                             <span style={{ color: "var(--text)" }}>
-                              {item.name} ({item.value})
+                              {item.name}{" "}
+                              <span style={{ color: "var(--muted)" }}>
+                                {sourceMetric === "sum"
+                                  ? `(${formatCurrency(item.sum)} ₸)`
+                                  : `(${item.count})`}
+                              </span>
                             </span>
                           </div>
                         ))}

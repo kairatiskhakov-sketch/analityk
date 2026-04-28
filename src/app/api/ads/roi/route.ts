@@ -38,10 +38,23 @@ type CampaignAgg = {
   name: string;
   platform: "META" | "TIKTOK" | "GOOGLE";
   spend: number;
+  impressions: number;
+  clicks: number;
   leads: number;
   attributedDeals: number;
+  ctr: number | null;
+  cpm: number | null;
+  cpc: number | null;
   cpl: number | null;
   cpDeal: number | null;
+};
+
+type DailyPoint = {
+  date: string; // YYYY-MM-DD
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
 };
 
 function safeDivide(num: number, den: number): number | null {
@@ -73,10 +86,25 @@ export async function GET(req: Request) {
     const insightsByCampaign = await prisma.adInsightsDaily.groupBy({
       by: ["campaignId", "platform"],
       where: { orgId, date: { gte: from, lte: to } },
-      _sum: { spend: true, leads: true },
+      _sum: { spend: true, leads: true, impressions: true, clicks: true },
       orderBy: { _sum: { spend: "desc" } },
       take: 50,
     });
+
+    const withDaily = url.searchParams.get("withDaily") === "1";
+    const dailySeries = withDaily
+      ? await prisma.adInsightsDaily.groupBy({
+          by: ["date"],
+          where: { orgId, date: { gte: from, lte: to } },
+          _sum: {
+            spend: true,
+            impressions: true,
+            clicks: true,
+            leads: true,
+          },
+          orderBy: { date: "asc" },
+        })
+      : [];
 
     const campaignIds = insightsByCampaign.map((r) => r.campaignId);
     const campaigns = campaignIds.length
@@ -140,14 +168,21 @@ export async function GET(req: Request) {
     const byCampaign: CampaignAgg[] = insightsByCampaign.map((r) => {
       const spend = Number(r._sum.spend ?? 0);
       const leads = Number(r._sum.leads ?? 0);
+      const impressions = Number(r._sum.impressions ?? 0);
+      const clicks = Number(r._sum.clicks ?? 0);
       const attributedDeals = campaignAttrMap.get(r.campaignId) ?? 0;
       return {
         campaignId: r.campaignId,
         name: campaignName.get(r.campaignId) ?? "—",
         platform: r.platform,
         spend: Math.round(spend * 100) / 100,
+        impressions,
+        clicks,
         leads,
         attributedDeals,
+        ctr: safeDivide(clicks * 100, impressions),
+        cpm: safeDivide(spend * 1000, impressions),
+        cpc: safeDivide(spend, clicks),
         cpl: safeDivide(spend, leads),
         cpDeal: safeDivide(spend, attributedDeals),
       };
@@ -166,6 +201,14 @@ export async function GET(req: Request) {
       { spend: 0, impressions: 0, clicks: 0, leads: 0, attributedDeals: 0 },
     );
 
+    const daily: DailyPoint[] = dailySeries.map((r) => ({
+      date: r.date.toISOString().slice(0, 10),
+      spend: Math.round(Number(r._sum.spend ?? 0) * 100) / 100,
+      impressions: Number(r._sum.impressions ?? 0),
+      clicks: Number(r._sum.clicks ?? 0),
+      leads: Number(r._sum.leads ?? 0),
+    }));
+
     return jsonOk({
       range: {
         from: from.toISOString().slice(0, 10),
@@ -176,9 +219,13 @@ export async function GET(req: Request) {
         spend: Math.round(overall.spend * 100) / 100,
         cpl: safeDivide(overall.spend, overall.leads),
         cpDeal: safeDivide(overall.spend, overall.attributedDeals),
+        ctr: safeDivide(overall.clicks * 100, overall.impressions),
+        cpm: safeDivide(overall.spend * 1000, overall.impressions),
+        cpc: safeDivide(overall.spend, overall.clicks),
       },
       byPlatform,
       byCampaign,
+      ...(withDaily ? { daily } : {}),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка";

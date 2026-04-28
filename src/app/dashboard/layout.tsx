@@ -15,10 +15,11 @@ export default async function DashboardLayout({
         role: session.user.role === "ADMIN" ? "Администратор" : "Менеджер",
       }
     : undefined;
+  const isPlatformAdmin = Boolean(session?.user?.isPlatformAdmin);
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg)" }}>
-      <Sidebar user={user} initialStatus={crmStatus} />
+      <Sidebar user={user} initialStatus={crmStatus} isPlatformAdmin={isPlatformAdmin} />
       <main
         className="flex min-w-0 flex-1 flex-col overflow-hidden"
         style={{ background: "linear-gradient(180deg, rgba(18,15,45,0.35) 0%, rgba(13,11,30,0) 100%)" }}

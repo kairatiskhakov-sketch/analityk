@@ -5,11 +5,15 @@ import { usePathname } from "next/navigation";
 import type { CrmStatusResponse } from "@/lib/crm/status";
 import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 
-const NAV_GROUPS = [
+type NavItem = { href: string; label: string; icon: string };
+type NavGroup = { label: string; items: NavItem[] };
+
+const BASE_NAV_GROUPS: NavGroup[] = [
   {
     label: "Аналитика",
     items: [
       { href: "/dashboard", label: "Дашборд", icon: "chart" },
+      { href: "/dashboard/marketing", label: "Маркетинг", icon: "megaphone" },
       { href: "/dashboard/managers", label: "Менеджеры", icon: "users" },
       { href: "/dashboard/plan", label: "План / Факт", icon: "target" },
       { href: "/dashboard/leads", label: "Лиды", icon: "clock" },
@@ -22,7 +26,14 @@ const NAV_GROUPS = [
       { href: "/dashboard/profile", label: "Профиль", icon: "user" },
     ],
   },
-] as const;
+];
+
+const ADMIN_NAV_GROUP: NavGroup = {
+  label: "Админка",
+  items: [
+    { href: "/admin/users", label: "Пользователи", icon: "shield" },
+  ],
+};
 
 const ICONS: Record<string, React.ReactNode> = {
   chart: (
@@ -64,19 +75,37 @@ const ICONS: Record<string, React.ReactNode> = {
       <path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" />
     </svg>
   ),
+  megaphone: (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4">
+      <path d="M2 6.5v3l8 3.5V3L2 6.5z" />
+      <path d="M10 6.5h2.5a1.5 1.5 0 0 1 0 3H10" />
+      <path d="M4 9.5L4.5 14h2L6 10" />
+    </svg>
+  ),
+  shield: (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4">
+      <path d="M8 1.5l5.5 2v4.5c0 3.3-2.4 6.2-5.5 7-3.1-0.8-5.5-3.7-5.5-7V3.5L8 1.5z" />
+      <path d="M5.5 8L7 9.5l3.5-3.5" />
+    </svg>
+  ),
 };
 
 interface SidebarProps {
   user?: { name: string; initials: string; role: string };
   initialStatus?: CrmStatusResponse;
+  isPlatformAdmin?: boolean;
 }
 
 export function Sidebar({
   user = { name: "Пользователь", initials: "П", role: "Аналитика" },
   initialStatus,
+  isPlatformAdmin = false,
 }: SidebarProps) {
   const pathname = usePathname();
   const isBitrixConnected = Boolean(initialStatus?.bitrix?.connected ?? true);
+  const navGroups: NavGroup[] = isPlatformAdmin
+    ? [...BASE_NAV_GROUPS, ADMIN_NAV_GROUP]
+    : BASE_NAV_GROUPS;
 
   return (
     <aside
@@ -105,7 +134,7 @@ export function Sidebar({
       </div>
 
       <nav className="flex-1 space-y-4">
-        {NAV_GROUPS.map((group) => (
+        {navGroups.map((group) => (
           <div key={group.label}>
             <p
               className="mb-1 px-3 text-[10px] font-medium uppercase tracking-[0.12em]"

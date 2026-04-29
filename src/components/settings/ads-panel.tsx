@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 
 /**
  * Settings → «Рекламные кабинеты»: подключение Meta / TikTok / Google Ads.
@@ -25,6 +26,12 @@ type AdConnection = {
   lastError: string | null;
   tokenExpiresAt?: string | null;
   createdAt: string;
+};
+
+type ConfigStatus = {
+  meta: boolean;
+  tiktok: boolean;
+  google: boolean;
 };
 
 type GoogleConn = {
@@ -61,16 +68,51 @@ export function AdsPanel() {
   const [google, setGoogle] = useState<AdConnection[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [config, setConfig] = useState<ConfigStatus | null>(null);
+  const [urlNotice, setUrlNotice] = useState<string | null>(null);
+
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  // Перехватываем ?ads_error=... из callback'ов и показываем читаемое сообщение,
+  // затем чистим query, чтобы не висело при F5.
+  useEffect(() => {
+    const adsError = searchParams?.get("ads_error");
+    if (!adsError) return;
+    const map: Record<string, string> = {
+      meta_not_configured:
+        "Подключение Meta не настроено: владельцу платформы нужно задать META_APP_ID и META_APP_SECRET в env (Vercel → Settings → Environment Variables).",
+      tiktok_not_configured:
+        "Подключение TikTok не настроено: владельцу платформы нужно задать TIKTOK_APP_ID и TIKTOK_APP_SECRET в env.",
+      meta_failed: searchParams.get("meta_msg") ?? "Ошибка Meta OAuth",
+      tiktok_failed: searchParams.get("tiktok_msg") ?? "Ошибка TikTok OAuth",
+    };
+    setUrlNotice(map[adsError] ?? `Ошибка: ${adsError}`);
+    // удаляем error-параметры из URL
+    const sp = new URLSearchParams(searchParams.toString());
+    sp.delete("ads_error");
+    sp.delete("meta_msg");
+    sp.delete("tiktok_msg");
+    const next = sp.toString();
+    router.replace(next ? `${pathname}?${next}` : pathname);
+  }, [searchParams, pathname, router]);
 
   const reload = useCallback(async () => {
     setLoading(true);
     setErr(null);
     try {
-      const [m, t, g] = await Promise.all([
+      const [cfgRes, m, t, g] = await Promise.all([
+        fetch("/api/integrations/config-status", { cache: "no-store" }).then((r) => r.json()),
         fetch("/api/integrations/meta/accounts", { cache: "no-store" }).then((r) => r.json()),
         fetch("/api/integrations/tiktok/accounts", { cache: "no-store" }).then((r) => r.json()),
         fetch("/api/integrations/google-ads/accounts", { cache: "no-store" }).then((r) => r.json()),
       ]);
+      setConfig({
+        meta: Boolean(cfgRes?.meta),
+        tiktok: Boolean(cfgRes?.tiktok),
+        google: Boolean(cfgRes?.google),
+      });
       setMeta(m.connections ?? []);
       setTiktok(t.connections ?? []);
       setGoogle(g.connections ?? []);
@@ -137,6 +179,19 @@ export function AdsPanel() {
 
   return (
     <div className="max-w-4xl space-y-4">
+      {urlNotice ? (
+        <div
+          className="rounded-[10px] border px-3 py-2 text-[12px]"
+          style={{
+            borderColor: "#f59e0b",
+            background: "rgba(245,158,11,0.06)",
+            color: "#fbbf24",
+          }}
+        >
+          {urlNotice}
+        </div>
+      ) : null}
+
       {err ? (
         <div
           className="rounded-[10px] border px-3 py-2 text-[12px]"
@@ -154,6 +209,8 @@ export function AdsPanel() {
         onSync={(id) => sync("meta", id)}
         onDisconnect={(id) => disconnect("meta", id)}
         connectHref="/api/integrations/meta/auth"
+        configured={config?.meta ?? true}
+        notConfiguredHint="Чтобы включить подключение Meta, задайте META_APP_ID и META_APP_SECRET в env (Vercel → Settings → Environment Variables) и опубликуйте redeploy."
       />
 
       <PlatformSection
@@ -164,6 +221,8 @@ export function AdsPanel() {
         onSync={(id) => sync("tiktok", id)}
         onDisconnect={(id) => disconnect("tiktok", id)}
         connectHref="/api/integrations/tiktok/auth"
+        configured={config?.tiktok ?? true}
+        notConfiguredHint="Чтобы включить подключение TikTok, задайте TIKTOK_APP_ID и TIKTOK_APP_SECRET в env (Vercel → Settings → Environment Variables) и опубликуйте redeploy."
       />
 
       <GoogleAdsSection
@@ -172,6 +231,7 @@ export function AdsPanel() {
         onSync={(id) => sync("google-ads", id)}
         onDisconnect={(id) => disconnect("google-ads", id)}
         onLinked={reload}
+        configured={config?.google ?? true}
       />
     </div>
   );
@@ -187,6 +247,8 @@ type PlatformSectionProps = {
   onSync: (id: string) => void;
   onDisconnect: (id: string) => void;
   connectHref: string;
+  configured: boolean;
+  notConfiguredHint: string;
 };
 
 function PlatformSection({
@@ -196,6 +258,8 @@ function PlatformSection({
   onSync,
   onDisconnect,
   connectHref,
+  configured,
+  notConfiguredHint,
 }: PlatformSectionProps) {
   return (
     <div
@@ -206,18 +270,46 @@ function PlatformSection({
         <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--text)" }}>
           {title}
         </h2>
-        <a
-          href={connectHref}
-          className="rounded-[8px] border px-3 py-1.5 text-[12px] font-medium"
+        {configured ? (
+          <a
+            href={connectHref}
+            className="rounded-[8px] border px-3 py-1.5 text-[12px] font-medium"
+            style={{
+              background: "linear-gradient(135deg, #7B5CF5, #9B7FF8)",
+              borderColor: "transparent",
+              color: "#fff",
+            }}
+          >
+            Подключить аккаунт
+          </a>
+        ) : (
+          <span
+            title={notConfiguredHint}
+            className="cursor-not-allowed rounded-[8px] border px-3 py-1.5 text-[12px] font-medium"
+            style={{
+              borderColor: "var(--border)",
+              background: "transparent",
+              color: "var(--muted)",
+              opacity: 0.6,
+            }}
+          >
+            Не настроено
+          </span>
+        )}
+      </div>
+
+      {!configured ? (
+        <p
+          className="mb-2 rounded-[8px] border px-3 py-2 text-[12px]"
           style={{
-            background: "linear-gradient(135deg, #7B5CF5, #9B7FF8)",
-            borderColor: "transparent",
-            color: "#fff",
+            borderColor: "rgba(245,158,11,0.4)",
+            background: "rgba(245,158,11,0.06)",
+            color: "#fbbf24",
           }}
         >
-          Подключить аккаунт
-        </a>
-      </div>
+          {notConfiguredHint}
+        </p>
+      ) : null}
 
       {connections.length === 0 ? (
         <p className="text-[12px]" style={{ color: "var(--muted)" }}>
@@ -315,6 +407,7 @@ type GoogleAdsSectionProps = {
   onSync: (id: string) => void;
   onDisconnect: (id: string) => void;
   onLinked: () => void;
+  configured: boolean;
 };
 
 function GoogleAdsSection({
@@ -323,6 +416,7 @@ function GoogleAdsSection({
   onSync,
   onDisconnect,
   onLinked,
+  configured,
 }: GoogleAdsSectionProps) {
   const [showLink, setShowLink] = useState(false);
   const [googleConns, setGoogleConns] = useState<GoogleConn[]>([]);
@@ -420,19 +514,47 @@ function GoogleAdsSection({
         <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--text)" }}>
           Google Ads
         </h2>
-        <button
-          type="button"
-          onClick={openDialog}
-          className="rounded-[8px] border px-3 py-1.5 text-[12px] font-medium"
+        {configured ? (
+          <button
+            type="button"
+            onClick={openDialog}
+            className="rounded-[8px] border px-3 py-1.5 text-[12px] font-medium"
+            style={{
+              background: "linear-gradient(135deg, #7B5CF5, #9B7FF8)",
+              borderColor: "transparent",
+              color: "#fff",
+            }}
+          >
+            Привязать customer
+          </button>
+        ) : (
+          <span
+            title="Чтобы включить Google Ads, задайте GOOGLE_CLIENT_ID и GOOGLE_CLIENT_SECRET в env."
+            className="cursor-not-allowed rounded-[8px] border px-3 py-1.5 text-[12px] font-medium"
+            style={{
+              borderColor: "var(--border)",
+              color: "var(--muted)",
+              opacity: 0.6,
+            }}
+          >
+            Не настроено
+          </span>
+        )}
+      </div>
+
+      {!configured ? (
+        <p
+          className="mb-2 rounded-[8px] border px-3 py-2 text-[12px]"
           style={{
-            background: "linear-gradient(135deg, #7B5CF5, #9B7FF8)",
-            borderColor: "transparent",
-            color: "#fff",
+            borderColor: "rgba(245,158,11,0.4)",
+            background: "rgba(245,158,11,0.06)",
+            color: "#fbbf24",
           }}
         >
-          Привязать customer
-        </button>
-      </div>
+          Чтобы включить Google Ads, задайте GOOGLE_CLIENT_ID и
+          GOOGLE_CLIENT_SECRET в env (Vercel → Settings → Environment Variables).
+        </p>
+      ) : null}
 
       {connections.length === 0 ? (
         <p className="text-[12px]" style={{ color: "var(--muted)" }}>

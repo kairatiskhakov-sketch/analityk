@@ -1,4 +1,3 @@
-import { jsonError } from "@/lib/http/json";
 import { buildMetaAuthUrl } from "@/lib/integrations/meta/oauth";
 import { resolveOrgId } from "@/lib/org/context";
 import { NextResponse } from "next/server";
@@ -11,8 +10,12 @@ export const dynamic = "force-dynamic";
  * Редиректит пользователя на Facebook OAuth. В state кодируем orgId, чтобы
  * callback мог привязать подключение к правильной организации без session
  * (браузер уходит на facebook.com и возвращается с другим referer).
+ *
+ * Если META_APP_ID/SECRET не настроены — редиректим в settings с понятным
+ * флагом, а не отдаём сырой JSON-error в браузер.
  */
-export async function GET() {
+export async function GET(req: Request) {
+  const origin = new URL(req.url).origin;
   try {
     const orgId = await resolveOrgId();
     const nonce = randomBytes(12).toString("base64url");
@@ -21,6 +24,17 @@ export async function GET() {
     return NextResponse.redirect(url);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка";
-    return jsonError(msg, 500);
+    const isNotConfigured = /META_APP_ID|META_APP_SECRET/i.test(msg);
+    if (isNotConfigured) {
+      return NextResponse.redirect(
+        new URL("/dashboard/settings?tab=ads&ads_error=meta_not_configured", origin),
+      );
+    }
+    return NextResponse.redirect(
+      new URL(
+        `/dashboard/settings?tab=ads&ads_error=meta_failed&meta_msg=${encodeURIComponent(msg)}`,
+        origin,
+      ),
+    );
   }
 }

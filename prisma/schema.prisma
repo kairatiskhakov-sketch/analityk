@@ -37,6 +37,14 @@ model Organization {
   plan        String   @default("free") // free | pro | business
   /// Публичный ключ для JS tracking-сниппета. Клиент вставляет на лендинг.
   trackingKey String   @unique
+  /// Публичная ссылка для просмотра аналитики без логина.
+  /// null — ссылки нет. Существование токена ≠ публикация.
+  publicShareToken    String?  @unique
+  /// Глобальный тумблер «опубликовано». Если false — токен не работает.
+  publicShareEnabled  Boolean  @default(false)
+  /// Список разделов, доступных по публичной ссылке.
+  /// Допустимые значения: dashboard, marketing, managers, plan, leads
+  publicShareSections String[] @default([])
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

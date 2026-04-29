@@ -8,16 +8,41 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveOrgIdFromShareToken } from "@/lib/org/public-share";
+import { SHARE_TOKEN_HEADER } from "@/lib/org/public-share-shared";
 
 /// Фиксированный id дефолтной организации из миграции 20260420120000_multi_tenancy_and_ads
 export const DEFAULT_ORG_ID = "org_default_0001";
 
 /**
+ * Динамическое чтение request headers без статического импорта next/headers,
+ * чтобы этот модуль не попал в client bundle через транзитивные импорты.
+ * (`bitrix-facts.ts` → `won-stages.ts` → `context.ts`, и `bitrix-facts.ts`
+ * импортируется из клиентского `PlanPageClient`.)
+ */
+function readShareTokenFromRequestHeaders(): string | null {
+  try {
+    const req: NodeRequire = (Function("return require") as () => NodeRequire)();
+    const mod = req("next/headers") as typeof import("next/headers");
+    return mod.headers().get(SHARE_TOKEN_HEADER);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Возвращает orgId для текущего контекста.
- * В auth-запросах вернёт currentOrgId пользователя, иначе — дефолтную org.
+ * Приоритет: x-share-token (публичная ссылка) → JWT-сессия → membership → DEFAULT.
  * Используется API-роутами и сервисными хелперами.
  */
 export async function resolveOrgId(): Promise<string> {
+  // 1. Публичная ссылка (read-only). Токен валиден только если публикация включена.
+  const shareToken = readShareTokenFromRequestHeaders();
+  if (shareToken) {
+    const orgId = await resolveOrgIdFromShareToken(shareToken);
+    if (orgId) return orgId;
+  }
+
   try {
     const session = await auth();
     // JWT сессия уже содержит currentOrgId (выставляется в auth.ts) — без похода в БД

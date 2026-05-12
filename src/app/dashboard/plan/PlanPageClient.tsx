@@ -117,9 +117,23 @@ export function PlanPageClient() {
     [periodType],
   );
 
+  // Защита от race: если в state остался period от прошлого periodType
+  // (например, "2026-05" при periodType="quarter"), нормализуем синхронно
+  // в текущем рендере. Это критично — иначе load() ниже летит на API
+  // с несовпадающим period/periodType и получает 400 "Некорректный period".
+  const normalizedPeriod = useMemo(() => {
+    const valid =
+      (periodType === "month" && /^\d{4}-\d{2}$/.test(period)) ||
+      (periodType === "quarter" && /^\d{4}-Q[1-4]$/.test(period)) ||
+      (periodType === "year" && /^\d{4}$/.test(period));
+    return valid ? period : periodKeyFromDate(new Date(), periodType);
+  }, [period, periodType]);
+
   useEffect(() => {
-    setPeriod(periodKeyFromDate(new Date(), periodType));
-  }, [periodType]);
+    if (normalizedPeriod !== period) {
+      setPeriod(normalizedPeriod);
+    }
+  }, [normalizedPeriod, period]);
 
   useEffect(() => {
     if (!pipelines.length) return;
@@ -303,6 +317,22 @@ export function PlanPageClient() {
       .slice(0, 3);
   }, [managers, mgrPlans]);
 
+  // Скрываем полностью пустых менеджеров (нет плана и нет факта).
+  // Пока факт ещё грузится — показываем всех с введённым планом, чтобы UI не «прыгал».
+  const visibleManagers = useMemo(() => {
+    return managers.filter((m) => {
+      const raw = (mgrPlans[m.id] ?? "").replace(/\s/g, "").replace(",", ".");
+      const uiPlan = parseFloat(raw);
+      const planVal =
+        Number.isFinite(uiPlan) && uiPlan > 0 ? uiPlan : m.plan;
+      const hasPlan = planVal > 0;
+      const hasFact = (m.fact ?? 0) > 0;
+      const hasDeals = (m.deals ?? 0) > 0;
+      if (factsLoading) return hasPlan;
+      return hasPlan || hasFact || hasDeals;
+    });
+  }, [managers, mgrPlans, factsLoading]);
+
   async function savePlan() {
     setSaving(true);
     setError(null);
@@ -372,10 +402,16 @@ export function PlanPageClient() {
                 <button
                   key={t}
                   type="button"
-                  onClick={() => setPeriodType(t)}
+                  onClick={() => {
+                    // Обновляем оба state в одной микрозадаче — React 18 их
+                    // батчит, и следующий рендер увидит согласованную пару.
+                    // Иначе load() стреляет с period от старого periodType.
+                    setPeriodType(t);
+                    setPeriod(periodKeyFromDate(new Date(), t));
+                  }}
                   className="rounded-[8px] px-2.5 py-1 text-[12px] font-semibold transition-colors"
                   style={{
-                    background: periodType === t ? "linear-gradient(135deg, #7B5CF5, #9B7FF8)" : "transparent",
+                    background: periodType === t ? "var(--olive)" : "transparent",
                     color: periodType === t ? "#ffffff" : "var(--muted)",
                   }}
                 >
@@ -530,7 +566,19 @@ export function PlanPageClient() {
               </tr>
             </thead>
             <tbody>
-              {managers.map((m) => {
+              {visibleManagers.length === 0 && !factsLoading ? (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="px-3 py-6 text-center text-[12px]"
+                    style={{ color: "var(--hint)" }}
+                  >
+                    Нет менеджеров с планом или фактом за этот период.
+                    Задайте планы выше — строки появятся здесь.
+                  </td>
+                </tr>
+              ) : null}
+              {visibleManagers.map((m) => {
                 const raw = mgrPlans[m.id] ?? "";
                 const tgt =
                   parseFloat(raw.replace(/\s/g, "").replace(",", ".")) || 0;
@@ -550,7 +598,7 @@ export function PlanPageClient() {
                       <div className="flex items-center gap-2">
                         <span
                           className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-semibold"
-                          style={{ background: "linear-gradient(135deg, #7B5CF5, #E040FB)", color: "#ffffff" }}
+                          style={{ background: "linear-gradient(135deg, var(--olive), var(--olive-2))", color: "#ffffff" }}
                         >
                           {initials(m.name)}
                         </span>
@@ -632,9 +680,9 @@ export function PlanPageClient() {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartSeries} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="planPurple" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="#7B5CF5" />
-                      <stop offset="100%" stopColor="#E040FB" />
+                    <linearGradient id="planOlive" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#b8e041" />
+                      <stop offset="100%" stopColor="#d1f963" />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
@@ -655,7 +703,7 @@ export function PlanPageClient() {
                       formatCurrency(typeof val === "number" ? val : Number(val))
                     }
                     contentStyle={{
-                      background: "rgba(26,22,53,0.9)",
+                      background: "rgba(20,20,20,0.95)",
                       border: "1px solid rgba(255,255,255,0.1)",
                       borderRadius: 8,
                       fontSize: 11,
@@ -666,24 +714,25 @@ export function PlanPageClient() {
                     type="monotone"
                     dataKey="fact"
                     name="Факт"
-                    stroke="url(#planPurple)"
+                    stroke="url(#planOlive)"
                     strokeWidth={2.5}
-                    dot={{ fill: "#7B5CF5", r: 3 }}
+                    dot={{ fill: "#d1f963", r: 3 }}
                   />
                   <Line
                     type="monotone"
                     dataKey="planLine"
                     name="План (темп)"
-                    stroke="#9B7FF8"
+                    stroke="#d1f963"
                     strokeWidth={1.5}
                     strokeDasharray="5 5"
+                    opacity={0.5}
                     dot={false}
                   />
                   <Line
                     type="monotone"
                     dataKey="forecastLine"
                     name="Прогноз"
-                    stroke="#00E676"
+                    stroke="#8bae3d"
                     strokeWidth={2}
                     strokeDasharray="4 4"
                     dot={false}
